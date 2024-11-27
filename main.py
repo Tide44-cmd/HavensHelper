@@ -42,10 +42,13 @@ c.execute('''CREATE TABLE IF NOT EXISTS logs (
 
 conn.commit()
 
-# Bot ready event
+# Sync slash commands with Discord
 @bot.event
 async def on_ready():
+    # Register the bot's slash commands globally (across all servers) or for specific guilds
+    await bot.tree.sync()  # Global sync
     print(f"Logged in as {bot.user}!")
+
 
 # Add a game
 @bot.tree.command(name="addgame", description="Adds a new game to the list with an optional description.")
