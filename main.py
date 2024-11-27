@@ -1,10 +1,17 @@
 import discord
 from discord.ext import commands
+from discord import ButtonStyle
+from discord.ui import Button, View
 import sqlite3
 import os
 from dotenv import load_dotenv
+import time
+from datetime import datetime, timedelta
 
 load_dotenv()
+
+# Track the bot's start time
+start_time = time.time()
 
 # Bot configuration
 intents = discord.Intents.default()
@@ -29,7 +36,8 @@ c.execute('''CREATE TABLE IF NOT EXISTS helpers (
                 user_id TEXT,
                 user_name TEXT,
                 game_id INTEGER,
-                status TEXT DEFAULT 'green',
+                platform TEXT,
+                status TEXT DEFAULT 'green' CHECK(status IN ('green', 'amber', 'red')),
                 FOREIGN KEY (game_id) REFERENCES games(id)
             )''')
 
@@ -37,7 +45,8 @@ c.execute('''CREATE TABLE IF NOT EXISTS logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user TEXT NOT NULL,
                 command TEXT NOT NULL,
-                game_name TEXT
+                game_name TEXT,
+                executed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )''')
 
 conn.commit()
@@ -48,7 +57,6 @@ async def on_ready():
     # Register the bot's slash commands globally (across all servers) or for specific guilds
     await bot.tree.sync()  # Global sync
     print(f"Logged in as {bot.user}!")
-
 
 # Add a game
 @bot.tree.command(name="addgame", description="Adds a new game to the list with an optional description.")
@@ -104,23 +112,50 @@ async def rename_game(interaction: discord.Interaction, old_name: str, new_name:
         await interaction.response.send_message(f"Game '{old_name}' not found.")
 
 # Add user as helper for a game
-@bot.tree.command(name="addme", description="Registers yourself as a helper for a specific game.")
+@bot.tree.command(name="addme", description="Register yourself as a helper for a specific game.")
 async def add_me(interaction: discord.Interaction, game_name: str):
-    user_id = str(interaction.user.id)
+    await interaction.response.send_message(
+        f"Select your platform for `{game_name}`:",
+        view=PlatformView(game_name),
+        ephemeral=True
+    )
+    
+# Define the custom platform view with button callbacks
+class PlatformView(View):
+    def __init__(self, game_name):
+        super().__init__()
+        self.game_name = game_name
+
+    @discord.ui.button(label="Xbox", style=ButtonStyle.primary, custom_id="platform_xbox")
+    async def xbox_button(self, interaction: discord.Interaction, button: Button):
+        await process_platform(interaction, self.game_name, "Xbox")
+
+    @discord.ui.button(label="PC", style=ButtonStyle.primary, custom_id="platform_pc")
+    async def pc_button(self, interaction: discord.Interaction, button: Button):
+        await process_platform(interaction, self.game_name, "PC")
+
+    @discord.ui.button(label="PlayStation", style=ButtonStyle.primary, custom_id="platform_ps")
+    async def ps_button(self, interaction: discord.Interaction, button: Button):
+        await process_platform(interaction, self.game_name, "PlayStation")
+
+# Process the platform selection
+async def process_platform(interaction: discord.Interaction, game_name: str, platform: str):
+    user_id = str(interaction.user.id)  # Correctly accesses the user from interaction
     user_name = str(interaction.user)
     c.execute("SELECT id FROM games WHERE game_name = ?", (game_name,))
     game = c.fetchone()
     if game:
         game_id = game[0]
-        c.execute("SELECT * FROM helpers WHERE user_id = ? AND game_id = ?", (user_id, game_id))
+        c.execute("SELECT * FROM helpers WHERE user_id = ? AND game_id = ? AND platform = ?", (user_id, game_id, platform))
         if not c.fetchone():
-            c.execute("INSERT INTO helpers (user_id, user_name, game_id) VALUES (?, ?, ?)", (user_id, user_name, game_id))
+            c.execute("INSERT INTO helpers (user_id, user_name, game_id, platform) VALUES (?, ?, ?, ?)", (user_id, user_name, game_id, platform))
             conn.commit()
-            await interaction.response.send_message(f"{interaction.user.mention}, you have been added as a helper for '{game_name}'.")
+            await interaction.response.send_message(f"{interaction.user.mention}, you have been added as a helper for `{game_name}` on `{platform}`.", ephemeral=True)
         else:
-            await interaction.response.send_message(f"{interaction.user.mention}, you are already a helper for '{game_name}'.")
+            await interaction.response.send_message(f"{interaction.user.mention}, you are already a helper for `{game_name}` on `{platform}`.", ephemeral=True)
     else:
-        await interaction.response.send_message(f"Game '{game_name}' not found.")
+        await interaction.response.send_message(f"Game `{game_name}` not found.", ephemeral=True)
+
 
 
 # Remove user as helper for a game
@@ -213,17 +248,20 @@ async def top_helper(interaction: discord.Interaction):
 
 
 # Show the helpers for a specific game
-@bot.tree.command(name="showgame", description="Shows detailed information about a specific game.")
-async def show_game(interaction: discord.Interaction, game_name: str):
+@bot.tree.command(name="showgame", description="Shows detailed information about a specific game, including helpers and their platforms.")
+async def show_game(interaction: discord.Interaction, game_name: str, platform: str = None):
     c.execute("SELECT id, description FROM games WHERE game_name = ?", (game_name,))
     game = c.fetchone()
     if game:
         game_id, description = game
-        c.execute("SELECT user_name, status FROM helpers WHERE game_id = ?", (game_id,))
+        if platform:
+            c.execute("SELECT user_name, status, platform FROM helpers WHERE game_id = ? AND platform = ?", (game_id, platform))
+        else:
+            c.execute("SELECT user_name, status, platform FROM helpers WHERE game_id = ?", (game_id,))
         helpers = c.fetchall()
 
         helper_list = "\n".join([
-            f"{helper[0]} {'🟢' if helper[1] == 'green' else '🟠' if helper[1] == 'amber' else '🔴'}"
+            f"{helper[0]} ({helper[2]}) {'🟢' if helper[1] == 'green' else '🟠' if helper[1] == 'amber' else '🔴'}"
             for helper in helpers
         ]) if helpers else "No helpers yet."
 
@@ -234,6 +272,7 @@ async def show_game(interaction: discord.Interaction, game_name: str):
         )
     else:
         await interaction.response.send_message(f"Game '{game_name}' not found.")
+
 
 
 # Command: Show all games with helpers in alphabetical order
@@ -288,6 +327,32 @@ async def help_command(interaction: discord.Interaction):
 Need more assistance? Feel free to ask!
 """
     await interaction.response.send_message(help_text)
+    
+@bot.tree.command(name="healthcheck", description="Checks the bot's status and health.")
+async def health_check(interaction: discord.Interaction):
+    try:
+        # Check database connection
+        c.execute("SELECT 1")
+        db_status = "✅ Connected"
+    except Exception as e:
+        db_status = f"❌ Error: {str(e)}"
+    
+    # Calculate uptime
+    uptime_seconds = int(time.time() - start_time)
+    uptime = str(timedelta(seconds=uptime_seconds))
+
+    # Get registered commands
+    command_count = len(bot.tree.get_commands())
+
+    # Construct the health report
+    health_report = (
+        "**Haven's Helper Health Check:**\n"
+        f"- **Uptime:** {uptime}\n"
+        f"- **Database:** {db_status}\n"
+        f"- **Registered Commands:** {command_count}\n"
+    )
+    
+    await interaction.response.send_message(health_report)
 
 
 token = os.getenv('DISCORD_TOKEN')
