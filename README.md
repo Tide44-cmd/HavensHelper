@@ -12,7 +12,7 @@ Key Features:
 Example Use Case:
 **Game Name:** Call of Duty: Black Ops 4  
 **Help Offered:** All Easter Egg Runs  
-**Helpers:** Jay 🟢
+**Helpers:** Tide 🟢
 
 Whether you're a completionist or just need a helping hand, Haven's Helper is your go-to bot for fostering a supportive gaming community!
 
