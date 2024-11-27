@@ -236,3 +236,16 @@ async def games_with_help(ctx):
     else:
         await ctx.send("No games currently have help offered.")
 
+# Command: Show bot version and information
+@bot.tree.command(name="botversion", description="Show bot version and additional information")
+async def bot_version(interaction: discord.Interaction):
+    version_info = """
+    **Bot Version:** 1.0
+    **Created by:** Tide44
+    **GitHub:** [HavensHelper](https://github.com/Tide44-cmd/HavensHelper)
+    """
+    await interaction.response.send_message(version_info)
+
+token = os.getenv('DISCORD_TOKEN')
+bot.run(token)
+
