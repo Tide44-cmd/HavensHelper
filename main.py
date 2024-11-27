@@ -246,6 +246,33 @@ async def bot_version(interaction: discord.Interaction):
     """
     await interaction.response.send_message(version_info)
 
+@bot.command(name="help")
+async def help_command(ctx):
+    help_text = """
+**Haven's Helper Commands:**
+
+- `?addgame "game name" [description]` - Adds a new game to the list with an optional description.
+- `?updatedescription "game name" "description"` - Updates the description for an existing game.
+- `?removegame "game name"` - Removes a game from the list.
+- `?renamegame "old game name" "new game name"` - Renames a game if there's an error or update needed.
+- `?addme "game name"` - Registers yourself as a helper for a specific game.
+- `?removeme "game name"` - Removes yourself as a helper for a game.
+- `?setstatus "status"` - Sets your availability status:
+  - 🟢 Green: Available
+  - 🟠 Amber: Limited Availability
+  - 🔴 Red: Unavailable
+- `?showme` - Displays all the games you're helping with.
+- `?showuser "@user"` - Displays what games a specific user is helping with.
+- `?nothelped` - Displays games that currently lack helpers.
+- `?tophelper` - Shows a leaderboard of users helping with the most games.
+- `?showgame "game name"` - Shows detailed information about a specific game, including its description and helpers.
+- `?gameswithhelp` - Displays all games that currently have help offered, sorted alphabetically.
+- `?botversion` - Displays the bot's version and additional information.
+
+Need more assistance? Feel free to ask!
+"""
+    await ctx.send(help_text)
+
 token = os.getenv('DISCORD_TOKEN')
 bot.run(token)
 
