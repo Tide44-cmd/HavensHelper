@@ -194,10 +194,14 @@ async def show_me(interaction: discord.Interaction):
                  WHERE h.user_id = ?''', (user_id,))
     games = c.fetchall()
     if games:
-        game_list = "\n".join([f"{game[0]} ({game[2]}) - {game[1] if game[1] else 'No description'}" for game in games])
+        game_list = "\n".join([
+            f"{game[0]} {'🟢' if game[2] == 'green' else '🟠' if game[2] == 'amber' else '🔴'} - {game[1] if game[1] else 'No description'}"
+            for game in games
+        ])
         await interaction.response.send_message(f"Games you help with:\n{game_list}")
     else:
         await interaction.response.send_message("You are not helping with any games.")
+
 
 
 # Show games a user helps with
@@ -210,10 +214,14 @@ async def show_user(interaction: discord.Interaction, user: discord.Member):
                  WHERE h.user_id = ?''', (user_id,))
     games = c.fetchall()
     if games:
-        game_list = "\n".join([f"{game[0]} ({game[2]}) - {game[1] if game[1] else 'No description'}" for game in games])
+        game_list = "\n".join([
+            f"{game[0]} {'🟢' if game[2] == 'green' else '🟠' if game[2] == 'amber' else '🔴'} - {game[1] if game[1] else 'No description'}"
+            for game in games
+        ])
         await interaction.response.send_message(f"Games {user.name} helps with:\n{game_list}")
     else:
         await interaction.response.send_message(f"{user.mention} is not helping with any games.")
+
 
 
 # Show games with no helpers
