@@ -32,4 +32,6 @@ Commands Overview:
 - /tophelper - Shows a leaderboard of users helping with the most games.
 - /showgame `"game name"` - Shows detailed information about a specific game, including its description and helpers.
 - /gameswithhelp - Displays all games that currently have help offered, sorted alphabetically.
-
+- /botversion - Displays the bot's version and additional information.
+- /help - Displays a list of all available commands.
+- /healthcheck - Checks the bot's status and health.
