@@ -10,6 +10,7 @@ Key Features:
 - Transparency: Logs track all bot activities for accountability.
 
 Example Use Case:
+
 **Game Name:** Call of Duty: Black Ops 4  
 **Help Offered:** All Easter Egg Runs  
 **Helpers:** Tide 🟢
