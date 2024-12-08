@@ -48,6 +48,25 @@ c.execute('''CREATE TABLE IF NOT EXISTS logs (
                 game_name TEXT,
                 executed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )''')
+            
+c.execute('''CREATE TABLE IF NOT EXISTS thanks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                thanked_user_id TEXT NOT NULL,
+                thanked_user_name TEXT NOT NULL,
+                thanking_user_id TEXT NOT NULL,
+                thanking_user_name TEXT NOT NULL,
+                game TEXT DEFAULT NULL,
+                message TEXT DEFAULT NULL,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )''')
+            
+# Create indexes for faster queries
+c.execute('CREATE INDEX IF NOT EXISTS idx_game_name ON games(game_name)')
+c.execute('CREATE INDEX IF NOT EXISTS idx_user_id ON helpers(user_id)')
+c.execute('CREATE INDEX IF NOT EXISTS idx_game_id ON helpers(game_id)')
+c.execute('CREATE INDEX IF NOT EXISTS idx_thanked_user_id ON thanks(thanked_user_id)')
+c.execute('CREATE INDEX IF NOT EXISTS idx_thanking_user_id ON thanks(thanking_user_id)')
+c.execute('CREATE INDEX IF NOT EXISTS idx_timestamp ON thanks(timestamp)')
 
 conn.commit()
 
@@ -223,7 +242,6 @@ async def show_user(interaction: discord.Interaction, user: discord.Member):
         await interaction.response.send_message(f"{user.mention} is not helping with any games.")
 
 
-
 # Show games with no helpers
 @bot.tree.command(name="nothelped", description="Displays games that currently lack helpers.")
 async def not_helped(interaction: discord.Interaction):
@@ -302,7 +320,7 @@ async def games_with_help(interaction: discord.Interaction):
 @bot.tree.command(name="botversion", description="Displays the bot's version and additional information.")
 async def bot_version(interaction: discord.Interaction):
     version_info = """
-    **Bot Version:** 1.0
+    **Bot Version:** 1.1
     **Created by:** Tide44
     **GitHub:** [HavensHelper](https://github.com/Tide44-cmd/HavensHelper)
     """
@@ -314,27 +332,114 @@ async def help_command(interaction: discord.Interaction):
     help_text = """
 **Haven's Helper Commands:**
 
-- `/addgame "game name" [description]` - Adds a new game to the list with an optional description.
-- `/updatedescription "game name" "description"` - Updates the description for an existing game.
-- `/removegame "game name"` - Removes a game from the list.
-- `/renamegame "old game name" "new game name"` - Renames a game if there's an error or update needed.
-- `/addme "game name"` - Registers yourself as a helper for a specific game.
-- `/removeme "game name"` - Removes yourself as a helper for a game.
-- `/setstatus "status"` - Sets your availability status:
-  - 🟢 Green: Available
-  - 🟠 Amber: Limited Availability
-  - 🔴 Red: Unavailable
-- `/showme` - Displays all the games you're helping with.
-- `/showuser "@user"` - Displays what games a specific user is helping with.
-- `/nothelped` - Displays games that currently lack helpers.
-- `/tophelper` - Shows a leaderboard of users helping with the most games.
-- `/showgame "game name"` - Shows detailed information about a specific game, including its description and helpers.
-- `/gameswithhelp` - Displays all games that currently have help offered, sorted alphabetically.
-- `/botversion` - Displays the bot's version and additional information.
+- **Game Management:**
+  - `/addgame "game name" [description]` - Adds a new game to the list with an optional description.
+  - `/updatedescription "game name" "description"` - Updates the description for an existing game.
+  - `/removegame "game name"` - Removes a game from the list.
+  - `/renamegame "old game name" "new game name"` - Renames a game if there's an error or update needed.
+
+- **Helper Management:**
+  - `/addme "game name"` - Registers yourself as a helper for a specific game.
+  - `/removeme "game name"` - Removes yourself as a helper for a game.
+  - `/setstatus "status"` - Sets your availability status:
+    - 🟢 Green: Available
+    - 🟠 Amber: Limited Availability
+    - 🔴 Red: Unavailable.
+
+- **Insights and Discovery:**
+  - `/showme` - Displays all the games you're helping with.
+  - `/showuser "@user"` - Displays what games a specific user is helping with.
+  - `/nothelped` - Displays games that currently lack helpers.
+  - `/tophelper` - Shows a leaderboard of users helping with the most games.
+  - `/showgame "game name"` - Shows detailed information about a specific game, including its description and helpers.
+  - `/gameswithhelp` - Displays all games that currently have help offered, sorted alphabetically.
+
+- **Thanks and Feedback:**
+  - `/givethanks @user [Game] [Message]` - Give thanks to another user with optional game and message details. (Cannot thank yourself.)
+  - `/mostthanked [Month] [Year]` - Shows the most thanked users, either all-time or for a specific month and year.
+  - `/showfeedback @user` - Displays the last 10 feedback messages received by a specific user.
+
+- **Bot Information:**
+  - `/botversion` - Displays the bot's version and additional information.
 
 Need more assistance? Feel free to ask!
 """
     await interaction.response.send_message(help_text)
+
+    
+@bot.tree.command(name="givethanks", description="Give thanks to another user for their help.")
+async def give_thanks(interaction: discord.Interaction, 
+                      user: discord.Member, 
+                      game: str = None, 
+                      message: str = None):
+    thanking_user_id = str(interaction.user.id)
+    thanking_user_name = str(interaction.user)
+    thanked_user_id = str(user.id)
+    thanked_user_name = str(user)
+
+    # Prevent self-thanks
+    if thanking_user_id == thanked_user_id:
+        await interaction.response.send_message("You can't thank yourself!", ephemeral=True)
+        return
+
+    # Insert into database
+    c.execute('''INSERT INTO thanks (thanked_user_id, thanked_user_name, thanking_user_id, thanking_user_name, game, message)
+                 VALUES (?, ?, ?, ?, ?, ?)''',
+              (thanked_user_id, thanked_user_name, thanking_user_id, thanking_user_name, game, message))
+    conn.commit()
+
+    response_message = f"{interaction.user.mention} thanked {user.mention}!"
+    if game:
+        response_message += f"\n**Game:** {game}"
+    if message:
+        response_message += f"\n**Message:** {message}"
+    
+    await interaction.response.send_message(response_message)
+    
+@bot.tree.command(name="mostthanked", description="Shows the most thanked users.")
+async def most_thanked(interaction: discord.Interaction, month: int = None, year: int = None):
+    # Build the SQL query dynamically based on optional parameters
+    query = '''SELECT thanked_user_name, COUNT(*) as thank_count
+               FROM thanks'''
+    params = []
+
+    if month and year:
+        query += ''' WHERE strftime('%m', timestamp) = ? AND strftime('%Y', timestamp) = ?'''
+        params.extend([f"{month:02d}", str(year)])
+
+    query += ''' GROUP BY thanked_user_id, thanked_user_name
+                 ORDER BY thank_count DESC
+                 LIMIT 5'''
+    
+    c.execute(query, params)
+    results = c.fetchall()
+
+    if results:
+        leaderboard = "\n".join([f"{idx + 1}. {row[0]} - {row[1]} thanks" for idx, row in enumerate(results)])
+        await interaction.response.send_message(f"**Most Thanked Users:**\n{leaderboard}")
+    else:
+        await interaction.response.send_message("No thanks recorded for the specified period.")
+
+@bot.tree.command(name="showfeedback", description="Shows the last 10 feedback messages received by a user.")
+async def show_feedback(interaction: discord.Interaction, user: discord.Member):
+    user_id = str(user.id)
+    c.execute('''SELECT thanking_user_name, game, message, timestamp
+                 FROM thanks
+                 WHERE thanked_user_id = ?
+                 ORDER BY timestamp DESC
+                 LIMIT 10''', (user_id,))
+    feedback = c.fetchall()
+
+    if feedback:
+        feedback_list = "\n".join([
+            f"**From:** {row[0]}\n**Game:** {row[1] if row[1] else 'N/A'}\n**Message:** {row[2] if row[2] else 'No message'}\n**Date:** {row[3]}"
+            for row in feedback
+        ])
+        await interaction.response.send_message(f"**Feedback for {user.name}:**\n{feedback_list}")
+    else:
+        await interaction.response.send_message(f"No feedback found for {user.mention}.")
+
+
     
 @bot.tree.command(name="healthcheck", description="Checks the bot's status and health.")
 async def health_check(interaction: discord.Interaction):
