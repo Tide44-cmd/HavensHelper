@@ -34,4 +34,36 @@ Commands Overview:
 - /gameswithhelp - Displays all games that currently have help offered, sorted alphabetically.
 - /botversion - Displays the bot's version and additional information.
 - /help - Displays a list of all available commands.
-- /healthcheck - Checks the bot's status and health.
+- /healthcheck - Checks the bot's status and health
+
+###Game Management:
+- /addgame "game name" [description] - Adds a new game to the list, with an optional description.
+- /updatedescription "game name" "description" - Updates the description for an existing game.
+- /removegame "game name" - Removes a game from the list.
+- /renamegame "old game name" "new game name" - Renames a game if there’s an error or update needed.
+
+Helper Management:
+	•	/addme "game name" - Registers yourself as a helper for a specific game.
+	•	/removeme "game name" - Removes yourself as a helper for a game.
+	•	/setstatus "status" - Sets your availability status:
+	•	🟢 Green: Available
+	•	🟠 Amber: Limited Availability
+	•	🔴 Red: Unavailable.
+
+Insights and Discovery:
+	•	/showme - Displays all the games you’re helping with.
+	•	/showuser "@user" - Displays what games a specific user is helping with.
+	•	/nothelped - Displays games that currently lack helpers.
+	•	/tophelper - Shows a leaderboard of users helping with the most games.
+	•	/showgame "game name" - Shows detailed information about a specific game, including its description and helpers.
+	•	/gameswithhelp - Displays all games that currently have help offered, sorted alphabetically.
+
+Thanks and Feedback:
+	•	/givethanks @user [Game] [Message] - Give thanks to another user for their help, with optional game and message details. (Cannot thank yourself.)
+	•	/mostthanked [Month] [Year] - Shows the most thanked users, either all-time or for a specific month and year.
+	•	/showfeedback @user - Displays the last 10 feedback messages received by a specific user.
+
+Bot Information:
+	•	/botversion - Displays the bot’s version and additional information.
+	•	/help - Displays a list of all available commands.
+	•	/healthcheck - Checks the bot’s status and health.
