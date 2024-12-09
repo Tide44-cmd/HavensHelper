@@ -51,3 +51,8 @@ Whether you're a completionist or just need a helping hand, Haven's Helper is yo
 - /botversion - Displays the bot’s version and additional information.
 - /help - Displays a list of all available commands.
 - /healthcheck - Checks the bot’s status and health.
+
+
+## For detailed instructions on how to set up and run
+- Visit [Cabin Squad Bot](https://github.com/Tide44-cmd/CabinSquadBot).
+  
