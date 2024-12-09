@@ -36,7 +36,7 @@ Commands Overview:
 - /help - Displays a list of all available commands.
 - /healthcheck - Checks the bot's status and health
 
-###Game Management:
+### Game Management:
 - /addgame "game name" [description] - Adds a new game to the list, with an optional description.
 - /updatedescription "game name" "description" - Updates the description for an existing game.
 - /removegame "game name" - Removes a game from the list.
