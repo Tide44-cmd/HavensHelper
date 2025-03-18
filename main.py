@@ -403,6 +403,7 @@ async def most_thanked(interaction: discord.Interaction, month: int = None, year
                FROM thanks'''
     params = []
 
+    # Modify query if filtering by month and year
     if month and year:
         query += ''' WHERE strftime('%m', timestamp) = ? AND strftime('%Y', timestamp) = ?'''
         params.extend([f"{month:02d}", str(year)])
@@ -414,11 +415,21 @@ async def most_thanked(interaction: discord.Interaction, month: int = None, year
     c.execute(query, params)
     results = c.fetchall()
 
-    if results:
-        leaderboard = "\n".join([f"{idx + 1}. {row[0]} - {row[1]} thanks" for idx, row in enumerate(results)])
-        await interaction.response.send_message(f"**Most Thanked Users:**\n{leaderboard}")
+    # Determine title based on provided parameters
+    if month and year:
+        title = f"Most Thanked Users ({calendar.month_name[month]} {year}):"
     else:
-        await interaction.response.send_message("No thanks recorded for the specified period.")
+        title = "Most Thanked Users (All-Time):"
+
+    if results:
+        # Format the results into a list
+        thank_list = "\n".join([f"{row[0]} - {row[1]} thanks" for row in results])
+        response = f"**{title}**\n{thank_list}"
+    else:
+        response = f"**{title}**\nNo thanks recorded for the specified period."
+
+    await interaction.response.send_message(response)
+
 
 @bot.tree.command(name="showfeedback", description="Shows the last 10 feedback messages received by a user.")
 async def show_feedback(interaction: discord.Interaction, user: discord.Member):
