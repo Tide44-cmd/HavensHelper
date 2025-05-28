@@ -32,6 +32,10 @@ c.execute('''CREATE TABLE IF NOT EXISTS games (
                 description TEXT
             )''')
 
+
+c.execute('''ALTER TABLE games ADD COLUMN guide_url TEXT;
+            )''')
+
 c.execute('''CREATE TABLE IF NOT EXISTS helpers (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id TEXT,
@@ -79,16 +83,17 @@ async def on_ready():
     print(f"Logged in as {bot.user}!")
 
 # Add a game
-@bot.tree.command(name="addgame", description="Adds a new game to the list with an optional description.")
-async def add_game(interaction: discord.Interaction, game_name: str, description: str = None):
+@bot.tree.command(name="addgame", description="Adds a new game with optional description and guide URL.")
+async def add_game(interaction: discord.Interaction, game_name: str, description: str = None, guide_url: str = None):
     try:
-        c.execute("INSERT INTO games (game_name, description) VALUES (?, ?)", (game_name, description))
+        c.execute("INSERT INTO games (game_name, description, guide_url) VALUES (?, ?, ?)", (game_name, description, guide_url))
         conn.commit()
         c.execute("INSERT INTO logs (user, command, game_name) VALUES (?, ?, ?)", (str(interaction.user), "addgame", game_name))
         conn.commit()
         await interaction.response.send_message(f"Game '{game_name}' has been added.")
     except sqlite3.IntegrityError:
         await interaction.response.send_message(f"Game '{game_name}' is already in the list.")
+
 
 
 # Update game description
@@ -98,6 +103,17 @@ async def update_description(interaction: discord.Interaction, game_name: str, d
     if c.rowcount > 0:
         conn.commit()
         await interaction.response.send_message(f"Description for '{game_name}' has been updated.")
+    else:
+        await interaction.response.send_message(f"Game '{game_name}' not found.")
+
+
+# Update game URL
+@bot.tree.command(name="updateurl", description="Updates or adds a guide URL for a game.")
+async def update_url(interaction: discord.Interaction, game_name: str, guide_url: str):
+    c.execute("UPDATE games SET guide_url = ? WHERE game_name = ?", (guide_url, game_name))
+    if c.rowcount > 0:
+        conn.commit()
+        await interaction.response.send_message(f"Guide URL for '{game_name}' updated.")
     else:
         await interaction.response.send_message(f"Game '{game_name}' not found.")
 
@@ -134,11 +150,21 @@ async def rename_game(interaction: discord.Interaction, old_name: str, new_name:
 # Add user as helper for a game
 @bot.tree.command(name="addme", description="Register yourself as a helper for a specific game.")
 async def add_me(interaction: discord.Interaction, game_name: str):
-    await interaction.response.send_message(
-        f"Select your platform for `{game_name}`:",
-        view=PlatformView(game_name),
-        ephemeral=True
-    )
+    user_id = str(interaction.user.id)
+    user_name = str(interaction.user)
+    c.execute("SELECT id FROM games WHERE game_name = ?", (game_name,))
+    game = c.fetchone()
+    if game:
+        game_id = game[0]
+        c.execute("SELECT * FROM helpers WHERE user_id = ? AND game_id = ?", (user_id, game_id))
+        if not c.fetchone():
+            c.execute("INSERT INTO helpers (user_id, user_name, game_id) VALUES (?, ?, ?)", (user_id, user_name, game_id))
+            conn.commit()
+            await interaction.response.send_message(f"{interaction.user.mention}, you are now a helper for '{game_name}'.")
+        else:
+            await interaction.response.send_message(f"{interaction.user.mention}, you're already listed as a helper for '{game_name}'.")
+    else:
+        await interaction.response.send_message(f"Game '{game_name}' not found.")
     
 # Define the custom platform view with button callbacks
 class PlatformView(View):
@@ -244,17 +270,21 @@ async def show_user(interaction: discord.Interaction, user: discord.Member):
 
 
 # Show games with no helpers
-@bot.tree.command(name="nothelped", description="Displays games that currently lack helpers.")
+@bot.tree.command(name="nothelped", description="Displays games that have no helpers and no guides.")
 async def not_helped(interaction: discord.Interaction):
-    c.execute('''SELECT game_name, description 
-                 FROM games 
-                 WHERE id NOT IN (SELECT DISTINCT game_id FROM helpers)''')
+    c.execute('''
+        SELECT game_name, description
+        FROM games
+        WHERE id NOT IN (SELECT DISTINCT game_id FROM helpers)
+        AND (guide_url IS NULL OR guide_url = '')
+    ''')
     games = c.fetchall()
     if games:
         game_list = "\n".join([f"{game[0]} - {game[1] if game[1] else 'No description'}" for game in games])
-        await interaction.response.send_message(f"Games with no helpers:\n{game_list}")
+        await interaction.response.send_message(f"Games with no helpers and no guide:\n{game_list}")
     else:
-        await interaction.response.send_message("All games have helpers.")
+        await interaction.response.send_message("All games either have helpers or guides.")
+
 
 # Show top helpers
 @bot.tree.command(name="tophelper", description="Shows a leaderboard of users helping with the most games.")
@@ -275,46 +305,62 @@ async def top_helper(interaction: discord.Interaction):
 
 
 # Show the helpers for a specific game
-@bot.tree.command(name="showgame", description="Shows detailed information about a specific game, including helpers and their platforms.")
-async def show_game(interaction: discord.Interaction, game_name: str, platform: str = None):
-    c.execute("SELECT id, description FROM games WHERE game_name = ?", (game_name,))
+@bot.tree.command(name="showgame", description="Shows detailed information about a specific game, including guide and helpers.")
+async def show_game(interaction: discord.Interaction, game_name: str):
+    # Fetch game info
+    c.execute("SELECT id, description, guide_url FROM games WHERE game_name = ?", (game_name,))
     game = c.fetchone()
-    if game:
-        game_id, description = game
-        if platform:
-            c.execute("SELECT user_name, status, platform FROM helpers WHERE game_id = ? AND platform = ?", (game_id, platform))
-        else:
-            c.execute("SELECT user_name, status, platform FROM helpers WHERE game_id = ?", (game_id,))
-        helpers = c.fetchall()
 
-        helper_list = "\n".join([
-            f"{helper[0]} ({helper[2]}) {'🟢' if helper[1] == 'green' else '🟠' if helper[1] == 'amber' else '🔴'}"
-            for helper in helpers
-        ]) if helpers else "No helpers yet."
-
-        await interaction.response.send_message(
-            f"**Game Name:** {game_name}\n"
-            f"**Description:** {description if description else 'No description'}\n"
-            f"**Helpers:**\n{helper_list}"
-        )
-    else:
+    if not game:
         await interaction.response.send_message(f"Game '{game_name}' not found.")
+        return
 
+    game_id, description, guide_url = game
+
+    # Fetch helpers
+    c.execute("SELECT user_name, status FROM helpers WHERE game_id = ?", (game_id,))
+    helpers = c.fetchall()
+
+    # Format helper list
+    if helpers:
+        helper_list = "\n".join([
+            f"{user} {'🟢' if status == 'green' else '🟠' if status == 'amber' else '🔴'}"
+            for user, status in helpers
+        ])
+    else:
+        helper_list = "No helpers yet."
+
+    # Format guide display
+    guide_display = f"[Guide]({guide_url})" if guide_url else "No guide available."
+
+    # Build and send the response
+    await interaction.response.send_message(
+        f"**Game Name:** {game_name}\n"
+        f"**Description:** {description if description else 'No description'}\n"
+        f"**Guide:** {guide_display}\n"
+        f"**Helpers:**\n{helper_list}"
+    )
 
 
 # Command: Show all games with helpers in alphabetical order
-@bot.tree.command(name="gameswithhelp", description="Displays all games that currently have help offered.")
+@bot.tree.command(name="gameswithhelp", description="Displays all games with help or guides.")
 async def games_with_help(interaction: discord.Interaction):
-    c.execute('''SELECT DISTINCT g.game_name
-                 FROM games g
-                 JOIN helpers h ON g.id = h.game_id
-                 ORDER BY g.game_name ASC''')
+    c.execute('''
+        SELECT DISTINCT g.game_name, g.guide_url
+        FROM games g
+        LEFT JOIN helpers h ON g.id = h.game_id
+        WHERE h.game_id IS NOT NULL OR g.guide_url IS NOT NULL
+        ORDER BY g.game_name ASC
+    ''')
     games = c.fetchall()
     if games:
-        game_list = "\n".join([game[0] for game in games])
-        await interaction.response.send_message(f"Games with help currently offered (alphabetical order):\n{game_list}")
+        game_list = "\n".join([
+            f"{game[0]} {'📘' if game[1] else ''}" for game in games
+        ])
+        await interaction.response.send_message(f"Games with help or guides:\n{game_list}")
     else:
-        await interaction.response.send_message("No games currently have help offered.")
+        await interaction.response.send_message("No games currently have help or guides.")
+
 
 
 # Command: Show bot version and information
@@ -336,11 +382,12 @@ async def help_command(interaction: discord.Interaction):
 - **Game Management:**
   - `/addgame "game name" [description]` - Adds a new game to the list with an optional description.
   - `/updatedescription "game name" "description"` - Updates the description for an existing game.
+  - `/updateurl "game name" "URL Link"` - Updates or adds a guide URL for a game.
   - `/removegame "game name"` - Removes a game from the list.
   - `/renamegame "old game name" "new game name"` - Renames a game if there's an error or update needed.
 
 - **Helper Management:**
-  - `/addme "game name"` - Registers yourself as a helper for a specific game.
+  - `/addme "game name"` - Register yourself as a helper for a specific game.
   - `/removeme "game name"` - Removes yourself as a helper for a game.
   - `/setstatus "status"` - Sets your availability status:
     - 🟢 Green: Available
