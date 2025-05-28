@@ -33,8 +33,11 @@ c.execute('''CREATE TABLE IF NOT EXISTS games (
             )''')
 
 
-c.execute('''ALTER TABLE games ADD COLUMN guide_url TEXT;
-            )''')
+# Add 'guide_url' column if it doesn't already exist
+c.execute("PRAGMA table_info(games)")
+columns = [col[1] for col in c.fetchall()]
+if 'guide_url' not in columns:
+    c.execute("ALTER TABLE games ADD COLUMN guide_url TEXT")
 
 c.execute('''CREATE TABLE IF NOT EXISTS helpers (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
