@@ -100,14 +100,50 @@ async def add_game(interaction: discord.Interaction, game_name: str, description
 
 
 # Update game description
+class DescriptionChoiceView(View):
+    def __init__(self, game_name, new_description, existing_description):
+        super().__init__()
+        self.game_name = game_name
+        self.new_description = new_description
+        self.existing_description = existing_description
+
+    @discord.ui.button(label="Replace", style=ButtonStyle.danger)
+    async def replace(self, interaction: discord.Interaction, button: Button):
+        c.execute("UPDATE games SET description = ? WHERE game_name = ?", (self.new_description, self.game_name))
+        conn.commit()
+        await interaction.response.edit_message(content=f"✅ Description for '{self.game_name}' replaced.", view=None)
+
+    @discord.ui.button(label="Append", style=ButtonStyle.primary)
+    async def append(self, interaction: discord.Interaction, button: Button):
+        combined = f"{self.existing_description}; {interaction.user.name}: {self.new_description}"
+        c.execute("UPDATE games SET description = ? WHERE game_name = ?", (combined, self.game_name))
+        conn.commit()
+        await interaction.response.edit_message(content=f"✅ Description for '{self.game_name}' appended.", view=None)
+
+    @discord.ui.button(label="Cancel", style=ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.edit_message(content="❌ Update cancelled.", view=None)
+
+
 @bot.tree.command(name="updatedescription", description="Updates the description for an existing game.")
 async def update_description(interaction: discord.Interaction, game_name: str, description: str):
-    c.execute("UPDATE games SET description = ? WHERE game_name = ?", (description, game_name))
-    if c.rowcount > 0:
+    c.execute("SELECT description FROM games WHERE game_name = ?", (game_name,))
+    result = c.fetchone()
+    if not result:
+        await interaction.response.send_message(f"Game '{game_name}' not found.")
+        return
+
+    existing_description = result[0]
+    if existing_description:
+        view = DescriptionChoiceView(game_name, description, existing_description)
+        await interaction.response.send_message(
+            f"This game already has the description:\n**{existing_description}**\nWhat do you want to do?",
+            view=view
+        )
+    else:
+        c.execute("UPDATE games SET description = ? WHERE game_name = ?", (description, game_name))
         conn.commit()
         await interaction.response.send_message(f"Description for '{game_name}' has been updated.")
-    else:
-        await interaction.response.send_message(f"Game '{game_name}' not found.")
 
 
 # Update game URL
@@ -356,21 +392,39 @@ async def games_with_help(interaction: discord.Interaction):
         ORDER BY g.game_name ASC
     ''')
     games = c.fetchall()
-    if games:
-        game_list = "\n".join([
-            f"{game[0]} {'📘' if game[1] else ''}" for game in games
-        ])
-        await interaction.response.send_message(f"Games with help or guides:\n{game_list}")
-    else:
+
+    if not games:
         await interaction.response.send_message("No games currently have help or guides.")
+        return
 
+    # Prepare game list
+    game_entries = [f"{game[0]} {'📘' if game[1] else ''}" for game in games]
 
+    # Pagination logic
+    message_limit = 1900
+    messages = []
+    current_message = "Games with help or guides:\n"
+
+    for entry in game_entries:
+        if len(current_message) + len(entry) + 1 > message_limit:
+            messages.append(current_message)
+            current_message = entry + "\n"
+        else:
+            current_message += entry + "\n"
+
+    if current_message:
+        messages.append(current_message)
+
+    # Send the paginated messages
+    await interaction.response.send_message(messages[0])
+    for msg in messages[1:]:
+        await interaction.followup.send(msg)
 
 # Command: Show bot version and information
 @bot.tree.command(name="botversion", description="Displays the bot's version and additional information.")
 async def bot_version(interaction: discord.Interaction):
     version_info = """
-    **Bot Version:** 1.1
+    **Bot Version:** 1.3
     **Created by:** Tide44
     **GitHub:** [HavensHelper](https://github.com/Tide44-cmd/HavensHelper)
     """
@@ -501,7 +555,26 @@ async def show_feedback(interaction: discord.Interaction, user: discord.Member):
     else:
         await interaction.response.send_message(f"No feedback found for {user.mention}.")
 
+@bot.tree.command(name="deleteusermanual", description="Remove a user from all games using their username (Admin only)")
+@commands.has_permissions(administrator=True)
+async def remove_user_manual(interaction: discord.Interaction, username: str):
+    c.execute("DELETE FROM helpers WHERE user_name = ?", (username,))
+    conn.commit()
+    c.execute("INSERT INTO logs (user, command, game_name) VALUES (?, ?, ?)", 
+              (str(interaction.user), "removeusermanual", f"Removed {username} from all games"))
+    conn.commit()
+    await interaction.response.send_message(f"User '{username}' has been removed from all games.")
 
+@bot.tree.command(name="deleteuser", description="Remove a user from all games (Admin only)")
+@commands.has_permissions(administrator=True)
+async def remove_user(interaction: discord.Interaction, user: discord.User):
+    user_id = str(user.id)
+    c.execute("DELETE FROM helpers WHERE user_id = ?", (user_id,))
+    conn.commit()
+    c.execute("INSERT INTO logs (user, command, game_name) VALUES (?, ?, ?)", 
+              (str(interaction.user), "removeuser", f"Removed {user} from all games"))
+    conn.commit()
+    await interaction.response.send_message(f"User '{user}' has been removed from all games.")
     
 @bot.tree.command(name="healthcheck", description="Checks the bot's status and health.")
 async def health_check(interaction: discord.Interaction):
