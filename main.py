@@ -107,20 +107,20 @@ class DescriptionChoiceView(View):
         self.new_description = new_description
         self.existing_description = existing_description
 
-    @discord.ui.button(label="Replace", style=ButtonStyle.danger)
+    @discord.ui.button(label="Replace", style=ButtonStyle.primary)
     async def replace(self, interaction: discord.Interaction, button: Button):
         c.execute("UPDATE games SET description = ? WHERE game_name = ?", (self.new_description, self.game_name))
         conn.commit()
         await interaction.response.edit_message(content=f"✅ Description for '{self.game_name}' replaced.", view=None)
 
-    @discord.ui.button(label="Append", style=ButtonStyle.primary)
+    @discord.ui.button(label="Append", style=ButtonStyle.success)
     async def append(self, interaction: discord.Interaction, button: Button):
         combined = f"{self.existing_description}; {interaction.user.name}: {self.new_description}"
         c.execute("UPDATE games SET description = ? WHERE game_name = ?", (combined, self.game_name))
         conn.commit()
         await interaction.response.edit_message(content=f"✅ Description for '{self.game_name}' appended.", view=None)
 
-    @discord.ui.button(label="Cancel", style=ButtonStyle.secondary)
+    @discord.ui.button(label="Cancel", style=ButtonStyle.danger)
     async def cancel(self, interaction: discord.Interaction, button: Button):
         await interaction.response.edit_message(content="❌ Update cancelled.", view=None)
 
