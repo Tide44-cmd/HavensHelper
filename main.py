@@ -487,19 +487,40 @@ async def give_thanks(interaction: discord.Interaction,
         await interaction.response.send_message("You can't thank yourself!", ephemeral=True)
         return
 
-    # Insert into database
+   # Insert into database
     c.execute('''INSERT INTO thanks (thanked_user_id, thanked_user_name, thanking_user_id, thanking_user_name, game, message)
                  VALUES (?, ?, ?, ?, ?, ?)''',
               (thanked_user_id, thanked_user_name, thanking_user_id, thanking_user_name, game, message))
     conn.commit()
 
+    # Build response message
     response_message = f"{interaction.user.mention} thanked {user.mention}!"
     if game:
         response_message += f"\n**Game:** {game}"
     if message:
         response_message += f"\n**Message:** {message}"
-    
+
     await interaction.response.send_message(response_message)
+
+    # 🎯 Milestone Role Check
+    c.execute("SELECT COUNT(*) FROM thanks WHERE thanked_user_id = ?", (thanked_user_id,))
+    total_thanks = c.fetchone()[0]
+
+    milestone_roles = {
+        15: "The Pathfinder 🗺️",
+        50: "Haven's Guardian 🛡️",
+        100: "The Apex Hunter 🏹"
+    }
+
+    if total_thanks in milestone_roles:
+        mod_role_id = 1314735241360834640  # ID for @mods
+        role_name = milestone_roles[total_thanks]
+        mod_mention = f"<@&{mod_role_id}>"
+        congrats_message = (
+            f"🎉 Congratulations {user.mention}, you are now recognized as **\"{role_name}\"**!\n"
+            f"{mod_mention} please award this role in recognition of their support."
+        )
+        await interaction.channel.send(congrats_message)
     
 @bot.tree.command(name="mostthanked", description="Shows the most thanked users.")
 async def most_thanked(interaction: discord.Interaction, month: int = None, year: int = None):
@@ -515,7 +536,7 @@ async def most_thanked(interaction: discord.Interaction, month: int = None, year
 
     query += ''' GROUP BY thanked_user_id, thanked_user_name
                  ORDER BY thank_count DESC
-                 LIMIT 5'''
+                 LIMIT 10'''
     
     c.execute(query, params)
     results = c.fetchall()
