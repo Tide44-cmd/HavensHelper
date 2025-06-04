@@ -273,11 +273,15 @@ async def set_status(interaction: discord.Interaction, status: str):
 @bot.tree.command(name="showme", description="Displays all the games you're helping with.")
 async def show_me(interaction: discord.Interaction):
     user_id = str(interaction.user.id)
-    c.execute('''SELECT g.game_name, g.description, h.status 
-                 FROM games g 
-                 JOIN helpers h ON g.id = h.game_id 
-                 WHERE h.user_id = ?''', (user_id,))
+    c.execute('''
+        SELECT g.game_name, g.description, h.status 
+        FROM games g 
+        JOIN helpers h ON g.id = h.game_id 
+        WHERE h.user_id = ?
+        ORDER BY g.game_name ASC
+    ''', (user_id,))
     games = c.fetchall()
+    
     if games:
         game_list = "\n".join([
             f"{game[0]} {'🟢' if game[2] == 'green' else '🟠' if game[2] == 'amber' else '🔴'} - {game[1] if game[1] else 'No description'}"
@@ -286,6 +290,7 @@ async def show_me(interaction: discord.Interaction):
         await interaction.response.send_message(f"Games you help with:\n{game_list}")
     else:
         await interaction.response.send_message("You are not helping with any games.")
+
 
 
 
