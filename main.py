@@ -695,6 +695,73 @@ async def health_check(interaction: discord.Interaction):
     
     await interaction.response.send_message(health_report)
 
+# --- Modal with a variety of inputs (max 5 allowed by Discord) --- Delete from here
+class TideTestModal(discord.ui.Modal, title="Tide Test Modal"):
+    short_required = discord.ui.TextInput(
+        label="Short text (required)",
+        placeholder="Type at least 1 character…",
+        required=True,
+        min_length=1,
+        max_length=100,
+        style=discord.TextStyle.short,
+    )
+
+    short_optional = discord.ui.TextInput(
+        label="Short text (optional, with placeholder)",
+        placeholder="This one is optional",
+        required=False,
+        max_length=100,
+        style=discord.TextStyle.short,
+    )
+
+    short_prefilled = discord.ui.TextInput(
+        label="Short text (prefilled, min/max)",
+        default="42",
+        required=False,
+        min_length=1,
+        max_length=10,
+        style=discord.TextStyle.short,
+    )
+
+    para_optional = discord.ui.TextInput(
+        label="Paragraph (optional)",
+        placeholder="Multi-line input goes here…",
+        required=False,
+        max_length=1000,
+        style=discord.TextStyle.paragraph,
+    )
+
+    para_required = discord.ui.TextInput(
+        label="Paragraph (required, max 300)",
+        placeholder="Tell us something (up to 300 chars)…",
+        required=True,
+        max_length=300,
+        style=discord.TextStyle.paragraph,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        # Build a neat echo of user inputs (no storage)
+        def show(val: str | None) -> str:
+            s = (val or "").strip()
+            return s if s else "—"
+
+        lines = [
+            "**Your Modal Inputs:**",
+            f"• Short (required): {show(str(self.short_required))}",
+            f"• Short (optional): {show(str(self.short_optional))}",
+            f"• Short (prefilled): {show(str(self.short_prefilled))}",
+            f"• Paragraph (optional): {show(str(self.para_optional))}",
+            f"• Paragraph (required): {show(str(self.para_required))}",
+        ]
+        await interaction.response.send_message("\n".join(lines), ephemeral=True)
+
+# --- Slash command to open the modal ---
+@bot.tree.command(name="tidetest", description="Opens a test modal with various input styles.")
+async def tidetest(interaction: discord.Interaction):
+    await interaction.response.send_modal(TideTestModal())
+
+
+# --- Delete to here
 
 token = os.getenv('DISCORD_TOKEN')
 bot.run(token)
