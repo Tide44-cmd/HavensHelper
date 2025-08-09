@@ -2,6 +2,7 @@ import discord
 from discord.ext import commands
 from discord import ButtonStyle
 from discord.ui import Button, View
+from discord import AllowedMentions
 import sqlite3
 import os
 from dotenv import load_dotenv
@@ -478,54 +479,74 @@ Need more assistance? Feel free to ask!
 
     
 @bot.tree.command(name="givethanks", description="Give thanks to another user for their help.")
-async def give_thanks(interaction: discord.Interaction, 
-                      user: discord.Member, 
-                      game: str = None, 
-                      message: str = None):
+async def give_thanks(
+    interaction: discord.Interaction,
+    user: discord.Member,
+    game: str | None = None,
+    message: str | None = None
+):
     thanking_user_id = str(interaction.user.id)
-    thanking_user_name = str(interaction.user)
-    thanked_user_id = str(user.id)
-    thanked_user_name = str(user)
+    thanked_user_id  = str(user.id)
 
     # Prevent self-thanks
     if thanking_user_id == thanked_user_id:
         await interaction.response.send_message("You can't thank yourself!", ephemeral=True)
         return
 
-   # Insert into database
-    c.execute('''INSERT INTO thanks (thanked_user_id, thanked_user_name, thanking_user_id, thanking_user_name, game, message)
-                 VALUES (?, ?, ?, ?, ?, ?)''',
-              (thanked_user_id, thanked_user_name, thanking_user_id, thanking_user_name, game, message))
+    # --- Count BEFORE insert
+    c.execute("SELECT COUNT(*) FROM thanks WHERE thanked_user_id = ?", (thanked_user_id,))
+    before_count = int(c.fetchone()[0])
+
+    # --- Insert thanks
+    c.execute(
+        '''INSERT INTO thanks (thanked_user_id, thanked_user_name, thanking_user_id, thanking_user_name, game, message)
+           VALUES (?, ?, ?, ?, ?, ?)''',
+        (thanked_user_id, str(user), thanking_user_id, str(interaction.user), game, message)
+    )
     conn.commit()
 
-    # Build response message
+    # --- Count AFTER insert
+    after_count = before_count + 1  # cheaper than a second SELECT, but do a SELECT if you prefer
+    # If you prefer to requery:
+    # c.execute("SELECT COUNT(*) FROM thanks WHERE thanked_user_id = ?", (thanked_user_id,))
+    # after_count = int(c.fetchone()[0])
+
+    # Acknowledge the command quickly (first response)
     response_message = f"{interaction.user.mention} thanked {user.mention}!"
     if game:
         response_message += f"\n**Game:** {game}"
     if message:
         response_message += f"\n**Message:** {message}"
-
     await interaction.response.send_message(response_message)
 
-    # 🎯 Milestone Role Check
-    c.execute("SELECT COUNT(*) FROM thanks WHERE thanked_user_id = ?", (thanked_user_id,))
-    total_thanks = c.fetchone()[0]
-
-    milestone_roles = {
+    # --- Milestone checks (trigger only when crossing the threshold)
+    milestones = {
         15: "The Pathfinder 🗺️",
         50: "Haven's Guardian 🛡️",
-        100: "The Apex Hunter 🏹"
+        100: "The Apex Hunter 🏹",
     }
+    crossed = next((m for m in milestones if before_count < m <= after_count), None)
+    if crossed is not None:
+        role_name = milestones[crossed]
 
-    if total_thanks in milestone_roles:
-        mod_role_id = 1314735241360834640  # ID for @mods
-        role_name = milestone_roles[total_thanks]
-        mod_mention = f"<@&{mod_role_id}>"
-        congrats_message = (
-            f"🎉 Congratulations {user.mention}, you are now recognized as **\"{role_name}\"**!\n"
-            f"{mod_mention} please award this role in recognition of their support."
+        # Resolve the Mods role and allow role mentions
+        MOD_ROLE_ID = 1314735241360834640
+        guild = interaction.guild
+        mod_role = guild.get_role(MOD_ROLE_ID) if guild else None
+
+        # Fallback string mention if the role can’t be resolved
+        role_mention = mod_role.mention if mod_role else f"<@&{MOD_ROLE_ID}>"
+
+        congrats = (
+            f"🎉 {user.mention} just hit **{crossed} thanks** and earned **{role_name}**!\n"
+            f"{role_mention} please award this role in recognition of their support."
         )
-        await interaction.channel.send(congrats_message)
+
+        # Use followup for additional messages from a slash command
+        await interaction.followup.send(
+            congrats,
+            allowed_mentions=AllowedMentions(roles=True, users=True, everyone=False)
+        )
     
 @bot.tree.command(name="mostthanked", description="Shows the most thanked users.")
 async def most_thanked(interaction: discord.Interaction, month: int = None, year: int = None):
@@ -558,6 +579,27 @@ async def most_thanked(interaction: discord.Interaction, month: int = None, year
         response = f"**{title}**\n{thank_list}"
     else:
         response = f"**{title}**\nNo thanks recorded for the specified period."
+
+    await interaction.response.send_message(response)
+
+@bot.tree.command(name="mostthankedfull", description="Shows the full all-time list of most thanked users.")
+async def most_thanked_full(interaction: discord.Interaction):
+    # Query without date filters or LIMIT
+    query = '''SELECT thanked_user_name, COUNT(*) as thank_count
+               FROM thanks
+               GROUP BY thanked_user_id, thanked_user_name
+               ORDER BY thank_count DESC'''
+    
+    c.execute(query)
+    results = c.fetchall()
+
+    title = "Most Thanked Users (All-Time Full List):"
+
+    if results:
+        thank_list = "\n".join([f"{row[0]} - {row[1]} thanks" for row in results])
+        response = f"**{title}**\n{thank_list}"
+    else:
+        response = f"**{title}**\nNo thanks recorded."
 
     await interaction.response.send_message(response)
 
