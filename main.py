@@ -349,47 +349,37 @@ async def top_helper(interaction: discord.Interaction):
     else:
         await interaction.response.send_message("No helpers registered yet.")
 
-# --- Small helpers -----------------------------------------------------------
+# --- Small helper to safely send long lists -----------------------
+async def _send_long(interaction: discord.Interaction, header: str, lines: list[str]):
+    if not lines:
+        await interaction.response.send_message(header)
+        return
+    message_limit = 1900
+    current = header + "\n"
+    first = True
+    for line in lines:
+        if len(current) + len(line) + 1 > message_limit:
+            if first:
+                await interaction.response.send_message(current.rstrip())
+                first = False
+            else:
+                await interaction.followup.send(current.rstrip())
+            current = ""
+        current += line + "\n"
+    if current:
+        if first:
+            await interaction.response.send_message(current.rstrip())
+        else:
+            await interaction.followup.send(current.rstrip())
 
-def _send_long(interaction: discord.Interaction, text: str):
-    """Safely send text that may exceed 2000 chars by chunking."""
-    CHUNK = 1900
-    chunks = [text[i:i+CHUNK] for i in range(0, len(text), CHUNK)]
-    async def _go():
-        if not chunks:
-            await interaction.response.send_message("No results.")
-            return
-        await interaction.response.send_message(chunks[0])
-        for chunk in chunks[1:]:
-            await interaction.followup.send(chunk)
-    return _go()
 
-async def _game_autocomplete(interaction: discord.Interaction, current: str):
-    # Case-insensitive partial match, return up to 25
-    rows = conn.execute(
-        "SELECT game_name FROM games WHERE game_name LIKE ? ORDER BY game_name LIMIT 25",
-        (f"%{current}%",),
-    ).fetchall()
-    return [app_commands.Choice(name=r[0], value=r[0]) for r in rows]
-
-def _has_guide(row) -> bool:
-    """Given row with 'guide' column (or alias), decide if a guide exists."""
-    if row is None:
-        return False
-    guide = row if isinstance(row, str) else row["guide"]
-    return guide is not None and str(guide).strip() != ""
-
-# --- 1) gameswithhelp: show ALL games that have ≥1 helper; add 📘 if they ALSO have a guide ----
-
-@bot.tree.command(name="gameswithhelp", description="Lists all games that currently have helpers (adds 📘 if they also have a guide).")
+# 1) gameswithhelp — only games that have ≥1 helper; add 📘 if they also have a guide
+@bot.tree.command(name="gameswithhelp", description="Lists all games that currently have helpers (adds 📘 if a guide also exists).")
 async def games_with_help(interaction: discord.Interaction):
     sql = """
-    SELECT g.id,
-           g.game_name,
-           g.guide,
-           EXISTS(SELECT 1 FROM helpers h WHERE h.game_id = g.id) AS has_helper
+    SELECT g.game_name, g.guide_url
     FROM games g
-    WHERE EXISTS(SELECT 1 FROM helpers h WHERE h.game_id = g.id)
+    WHERE EXISTS (SELECT 1 FROM helpers h WHERE h.game_id = g.id)
     ORDER BY g.game_name COLLATE NOCASE;
     """
     rows = conn.execute(sql).fetchall()
@@ -398,28 +388,19 @@ async def games_with_help(interaction: discord.Interaction):
         await interaction.response.send_message("No games currently have helpers.")
         return
 
-    lines = []
-    for game_id, game_name, guide, has_helper in rows:
-        # has_helper is guaranteed True by WHERE; we only add 📘 when guide exists
-        line = f"• {game_name}"
-        if _has_guide(guide):
-            line += " 📘"
-        lines.append(line)
+    lines = [f"• {name}{' 📘' if (guide_url and str(guide_url).strip()) else ''}"
+             for (name, guide_url) in rows]
+    await _send_long(interaction, "**Games with Helpers** (📘 = has guide)", lines)
 
-    title = "**Games with Helpers**\n(Adds 📘 if a guide also exists)"
-    await _send_long(interaction, f"{title}\n" + "\n".join(lines))
 
-# --- 2) gameswithguides: show ALL games that have a guide; add 👥 if they ALSO have a helper ----
-
-@bot.tree.command(name="gameswithguides", description="Lists all games that have guides (adds 👥 if they also have helpers).")
+# 2) gameswithguides — only games that have a guide; add 👥 if they also have a helper
+@bot.tree.command(name="gameswithguides", description="Lists all games that have guides (adds 👥 if helpers also exist).")
 async def games_with_guides(interaction: discord.Interaction):
     sql = """
-    SELECT g.id,
-           g.game_name,
-           g.guide,
+    SELECT g.game_name,
            EXISTS(SELECT 1 FROM helpers h WHERE h.game_id = g.id) AS has_helper
     FROM games g
-    WHERE g.guide IS NOT NULL AND TRIM(g.guide) <> ''
+    WHERE g.guide_url IS NOT NULL AND TRIM(g.guide_url) <> ''
     ORDER BY g.game_name COLLATE NOCASE;
     """
     rows = conn.execute(sql).fetchall()
@@ -428,31 +409,17 @@ async def games_with_guides(interaction: discord.Interaction):
         await interaction.response.send_message("No games currently have guides.")
         return
 
-    lines = []
-    for game_id, game_name, guide, has_helper in rows:
-        line = f"• {game_name}"
-        if has_helper:
-            line += " 👥"
-        lines.append(line)
+    lines = [f"• {name}{' 👥' if has_helper else ''}" for (name, has_helper) in rows]
+    await _send_long(interaction, "**Games with Guides** (👥 = has helpers)", lines)
 
-    title = "**Games with Guides**\n(Adds 👥 if helpers also exist)"
-    await _send_long(interaction, f"{title}\n" + "\n".join(lines))
 
-# --- 3) showgame: tidy output; case-insensitive lookup; optional autocomplete -----------------
-
-STATUS_EMOJI = {
-    "green": "🟢",
-    "amber": "🟡",
-    "yellow": "🟡",
-    "red": "🔴",
-}
+# 3) showgame — case-insensitive, tidy sections (hide Guide if none; hide Helpers if none)
+STATUS_EMOJI = {"green": "🟢", "amber": "🟡", "yellow": "🟡", "red": "🔴"}
 
 @bot.tree.command(name="showgame", description="Show details for a game (case-insensitive).")
-@app_commands.autocomplete(game_name=_game_autocomplete)
 async def show_game(interaction: discord.Interaction, game_name: str):
-    # Case-insensitive exact match
     game = conn.execute(
-        "SELECT id, game_name, description, guide FROM games WHERE game_name = ? COLLATE NOCASE",
+        "SELECT id, game_name, description, guide_url FROM games WHERE game_name = ? COLLATE NOCASE",
         (game_name,)
     ).fetchone()
 
@@ -460,25 +427,20 @@ async def show_game(interaction: discord.Interaction, game_name: str):
         await interaction.response.send_message(f"Couldn't find a game named **{game_name}**.", ephemeral=True)
         return
 
-    game_id, proper_name, description, guide = game
+    game_id, proper_name, description, guide_url = game
 
-    # Fetch helpers (if any)
     helpers = conn.execute(
         "SELECT user_name, status FROM helpers WHERE game_id = ? ORDER BY user_name COLLATE NOCASE",
         (game_id,)
     ).fetchall()
 
-    # Build tidy output:
-    # Always show Name + Description (if present). Only show Guide section if present.
-    # Only show Helpers section if there are helpers.
-    parts = []
-    parts.append(f"**Game Name:** {proper_name}")
+    parts = [f"**Game Name:** {proper_name}"]
     if description and str(description).strip():
         parts.append(f"**Description:** {description}")
 
-    if _has_guide(guide):
-        # You can change this to print the URL or a short label; keeping your "Guide" label.
-        parts.append("**Guide:** Guide")
+    if guide_url and str(guide_url).strip():
+        # If you prefer your previous label, keep "Guide: Guide"; or show link:
+        parts.append(f"**Guide:** [Guide]({guide_url})")
 
     if helpers:
         helper_lines = []
