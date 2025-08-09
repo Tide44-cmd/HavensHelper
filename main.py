@@ -506,75 +506,77 @@ Need more assistance? Feel free to ask!
     await interaction.response.send_message(help_text)
 
     
-@bot.tree.command(name="givethanks", description="Give thanks to another user for their help.")
-async def give_thanks(
-    interaction: discord.Interaction,
-    user: discord.Member,
-    game: str | None = None,
-    message: str | None = None
-):
-    thanking_user_id = str(interaction.user.id)
-    thanked_user_id  = str(user.id)
+from discord import AllowedMentions
 
-    # Prevent self-thanks
+# --- Shared handler so slash & context menu behave the same
+MILESTONES = {15: "The Pathfinder 🗺️", 50: "Haven's Guardian 🛡️", 100: "The Apex Hunter 🏹"}
+MOD_ROLE_ID = 1314735241360834640  # replace with per-guild config when ready
+
+async def _process_give_thanks(interaction: discord.Interaction, thanked_member: discord.Member, game: str | None, message: str | None):
+    thanking_user_id = str(interaction.user.id)
+    thanked_user_id  = str(thanked_member.id)
+
     if thanking_user_id == thanked_user_id:
         await interaction.response.send_message("You can't thank yourself!", ephemeral=True)
         return
 
-    # --- Count BEFORE insert
-    c.execute("SELECT COUNT(*) FROM thanks WHERE thanked_user_id = ?", (thanked_user_id,))
-    before_count = int(c.fetchone()[0])
+    # Count BEFORE
+    before_count = conn.execute(
+        "SELECT COUNT(*) FROM thanks WHERE thanked_user_id = ?", (thanked_user_id,)
+    ).fetchone()[0]
 
-    # --- Insert thanks
-    c.execute(
+    # Insert
+    conn.execute(
         '''INSERT INTO thanks (thanked_user_id, thanked_user_name, thanking_user_id, thanking_user_name, game, message)
            VALUES (?, ?, ?, ?, ?, ?)''',
-        (thanked_user_id, str(user), thanking_user_id, str(interaction.user), game, message)
+        (thanked_user_id, str(thanked_member), thanking_user_id, str(interaction.user), game, message)
     )
-    conn.commit()
 
-    # --- Count AFTER insert
-    after_count = before_count + 1  # cheaper than a second SELECT, but do a SELECT if you prefer
-    # If you prefer to requery:
-    # c.execute("SELECT COUNT(*) FROM thanks WHERE thanked_user_id = ?", (thanked_user_id,))
-    # after_count = int(c.fetchone()[0])
+    # Ack
+    resp = f"{interaction.user.mention} thanked {thanked_member.mention}!"
+    if game: resp += f"\n**Game:** {game}"
+    if message: resp += f"\n**Message:** {message}"
+    # For context menu we may not have sent a response yet:
+    if interaction.response.is_done():
+        await interaction.followup.send(resp)
+    else:
+        await interaction.response.send_message(resp)
 
-    # Acknowledge the command quickly (first response)
-    response_message = f"{interaction.user.mention} thanked {user.mention}!"
-    if game:
-        response_message += f"\n**Game:** {game}"
-    if message:
-        response_message += f"\n**Message:** {message}"
-    await interaction.response.send_message(response_message)
-
-    # --- Milestone checks (trigger only when crossing the threshold)
-    milestones = {
-        15: "The Pathfinder 🗺️",
-        50: "Haven's Guardian 🛡️",
-        100: "The Apex Hunter 🏹",
-    }
-    crossed = next((m for m in milestones if before_count < m <= after_count), None)
+    # Milestone check
+    after_count = before_count + 1
+    crossed = next((m for m in MILESTONES if before_count < m <= after_count), None)
     if crossed is not None:
-        role_name = milestones[crossed]
-
-        # Resolve the Mods role and allow role mentions
-        MOD_ROLE_ID = 1314735241360834640
+        role_name = MILESTONES[crossed]
         guild = interaction.guild
         mod_role = guild.get_role(MOD_ROLE_ID) if guild else None
-
-        # Fallback string mention if the role can’t be resolved
         role_mention = mod_role.mention if mod_role else f"<@&{MOD_ROLE_ID}>"
-
         congrats = (
-            f"🎉 {user.mention} just hit **{crossed} thanks** and earned **{role_name}**!\n"
+            f"🎉 {thanked_member.mention} just hit **{crossed} thanks** and earned **{role_name}**!\n"
             f"{role_mention} please award this role in recognition of their support."
         )
-
-        # Use followup for additional messages from a slash command
         await interaction.followup.send(
             congrats,
             allowed_mentions=AllowedMentions(roles=True, users=True, everyone=False)
         )
+
+# --- Modal to capture optional inputs from the context menu
+class GiveThanksModal(discord.ui.Modal, title="Give Thanks"):
+    game = discord.ui.TextInput(label="Game (optional)", required=False, max_length=100)
+    note = discord.ui.TextInput(label="Message (optional)", required=False, style=discord.TextStyle.paragraph, max_length=500)
+
+    def __init__(self, target_member: discord.Member):
+        super().__init__()
+        self.target_member = target_member
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await _process_give_thanks(interaction, self.target_member, str(self.game).strip() or None, str(self.note).strip() or None)
+
+# --- Context menu registration
+@bot.tree.context_menu(name="Give Thanks")
+async def give_thanks_context(interaction: discord.Interaction, user: discord.Member):
+    # Open the modal to collect optional game/message
+    await interaction.response.send_modal(GiveThanksModal(user))
+
     
 @bot.tree.command(name="mostthanked", description="Shows the most thanked users.")
 async def most_thanked(interaction: discord.Interaction, month: int = None, year: int = None):
