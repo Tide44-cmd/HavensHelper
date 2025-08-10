@@ -779,14 +779,19 @@ async def _fetch_avatar_bytes(session: aiohttp.ClientSession, member: discord.Me
 
 # ---------- renderer for the table image ----------
 async def render_most_thanked_table(guild: discord.Guild, rows: list[dict]) -> discord.File:
-    # Canvas
-    W, H = 900, 720  # adjust height if you want more than 10 entries
-    bg = (22, 27, 34)   # dark card
+    # Layout constants
+    rows_to_draw = min(10, len(rows))
+    W = 900
+    top_margin = 90
+    bottom_margin = 48
+    row_h = 76  # avatar 64 + spacing
+    H = top_margin + rows_to_draw * row_h + bottom_margin
+
+    bg = (22, 27, 34)
     fg = (230, 230, 230)
     accent = (0, 200, 180)
     sub = (170, 180, 190)
-    row_h = 64 + 16  # avatar + padding
-    top_margin = 90
+
     im = Image.new("RGB", (W, H), bg)
     draw = ImageDraw.Draw(im)
 
@@ -797,37 +802,36 @@ async def render_most_thanked_table(guild: discord.Guild, rows: list[dict]) -> d
     # Header
     draw.text((40, 24), "Most thanked — Top 10", font=title_font, fill=(210, 240, 240))
 
-    # Bars scale
-    max_count = max((r["thank_count"] for r in rows), default=1)
+    # Scale for bars
+    max_count = max((r["thank_count"] for r in rows[:rows_to_draw]), default=1)
 
-    # Pre-fetch avatars concurrently
+    # Pre-fetch avatars
     async with aiohttp.ClientSession() as session:
-        avatars = []
-        for r in rows:
-            user_id = int(r["user_id"])
-            member = guild.get_member(user_id)
+        avatar_bytes: list[bytes | None] = []
+        for r in rows[:rows_to_draw]:
+            member = guild.get_member(int(r["user_id"]))
             if member is None:
                 try:
-                    member = await guild.fetch_member(user_id)
+                    member = await guild.fetch_member(int(r["user_id"]))
                 except Exception:
                     member = None
-            # Fallback: blank avatar if member not found
             if member:
                 try:
-                    avatars.append(await _fetch_avatar_bytes(session, member))
+                    async with session.get(str(member.display_avatar.url)) as resp:
+                        avatar_bytes.append(await resp.read())
                 except Exception:
-                    avatars.append(None)
+                    avatar_bytes.append(None)
             else:
-                avatars.append(None)
+                avatar_bytes.append(None)
 
-    # Draw rows
+    # Draw each row
     y = top_margin
     bar_w, bar_h = 520, 10
-    for i, r in enumerate(rows[:10], start=1):
+    bar_x = 420
+    for i, r in enumerate(rows[:rows_to_draw], start=1):
         user_id = int(r["user_id"])
         count = int(r["thank_count"])
 
-        # Try to get a display name from the guild; otherwise use stored name
         member = guild.get_member(user_id)
         if member is None:
             try:
@@ -837,32 +841,32 @@ async def render_most_thanked_table(guild: discord.Guild, rows: list[dict]) -> d
         display = member.display_name if member else (r.get("name") or f"User {user_id}")
 
         # Avatar
-        x_avatar, y_avatar = 40, y - 8
-        if avatars[i-1]:
+        if avatar_bytes[i-1]:
             try:
-                pfp = Image.open(io.BytesIO(avatars[i-1])).convert("RGB").resize((64, 64))
-                im.paste(pfp, (x_avatar, y_avatar))
+                pfp = Image.open(io.BytesIO(avatar_bytes[i-1])).convert("RGB").resize((64, 64))
+                im.paste(pfp, (40, y - 8))
             except Exception:
-                pass  # ignore bad images
+                pass
 
-        # Rank + name + count
+        # Rank + text
         rank_color = (255, 193, 7) if i == 1 else (200, 200, 200)
         draw.text((120, y - 18), f"#{i} • {display}", font=name_font, fill=rank_color)
         draw.text((120, y + 12), f"{count} thanks", font=small_font, fill=sub)
 
-        # Progress bar vs. top
+        # Progress bar
         pct = 0 if max_count == 0 else min(1.0, count / max_count)
-        bx, by = 420, y + 20
-        draw.rectangle([bx, by, bx + bar_w, by + bar_h], fill=(60, 70, 80))
-        draw.rectangle([bx, by, bx + int(bar_w * pct), by + bar_h], fill=accent)
+        by = y + 20
+        draw.rectangle([bar_x, by, bar_x + bar_w, by + bar_h], fill=(60, 70, 80))
+        draw.rectangle([bar_x, by, bar_x + int(bar_w * pct), by + bar_h], fill=accent)
 
         y += row_h
 
-    # Deliver as attachment
+    # Return as attachment
     buf = io.BytesIO()
     im.save(buf, format="PNG")
     buf.seek(0)
     return discord.File(buf, filename="mostthanked.png")
+
 
 # ---------- DB query helper ----------
 def _query_top_thanked(limit: int = 10):
