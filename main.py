@@ -882,19 +882,30 @@ def _query_top_thanked(limit: int = 10):
 # ---------- Slash command ----------
 @bot.tree.command(name="mostthankedtable", description="Shows a top-10 Most Thanked image table.")
 async def most_thanked_table(interaction: discord.Interaction):
+    # 1) Tell Discord we're working so the token doesn't expire
+    await interaction.response.defer(thinking=True)
+
+    # 2) Do the heavy work
     rows = _query_top_thanked(10)
     if not rows:
-        await interaction.response.send_message("No thanks recorded yet.", ephemeral=True)
+        await interaction.followup.send("No thanks recorded yet.", ephemeral=True)
         return
 
-    file = await render_most_thanked_table(interaction.guild, rows)
-    embed = discord.Embed(
-        title="Most Thanked — Top 10",
-        description="Recognition for helping others in the Haven.",
-        color=discord.Color.teal()
-    ).set_image(url="attachment://mostthanked.png")
+    try:
+        file = await render_most_thanked_table(interaction.guild, rows)
+        embed = discord.Embed(
+            title="Most Thanked — Top 10",
+            description="Recognition for helping others in the Haven.",
+            color=discord.Color.teal()
+        ).set_image(url="attachment://mostthanked.png")
 
-    await interaction.response.send_message(embed=embed, file=file)
+        # 3) Send the result AFTER deferring
+        await interaction.followup.send(embed=embed, file=file)
+
+    except Exception as e:
+        # Nice error so you see failures in-channel while testing
+        await interaction.followup.send(f"Rendering failed: `{e}`", ephemeral=True)
+
 
 
 # --- Delete to here
