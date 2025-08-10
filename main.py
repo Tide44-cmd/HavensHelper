@@ -826,8 +826,12 @@ async def render_most_thanked_table(guild: discord.Guild, rows: list[dict]) -> d
 
     # Draw each row
     y = top_margin
-    bar_w, bar_h = 520, 10
+    # Progress bar config
     bar_x = 420
+    right_padding = 80  # space from right edge
+    bar_w = W - bar_x - right_padding  # dynamically size bar
+    bar_h = 10
+  
     for i, r in enumerate(rows[:rows_to_draw], start=1):
         user_id = int(r["user_id"])
         count = int(r["thank_count"])
@@ -854,7 +858,9 @@ async def render_most_thanked_table(guild: discord.Guild, rows: list[dict]) -> d
         draw.text((120, y + 12), f"{count} thanks", font=small_font, fill=sub)
 
         # Progress bar
+        max_bar_fraction = 0.85  # 85% of the available bar space
         pct = 0 if max_count == 0 else min(1.0, count / max_count)
+        pct *= max_bar_fraction
         by = y + 20
         draw.rectangle([bar_x, by, bar_x + bar_w, by + bar_h], fill=(60, 70, 80))
         draw.rectangle([bar_x, by, bar_x + int(bar_w * pct), by + bar_h], fill=accent)
