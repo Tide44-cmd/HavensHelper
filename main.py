@@ -8,7 +8,7 @@ import sqlite3
 import os
 from dotenv import load_dotenv
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import calendar
 
 import io, asyncio, aiohttp, math
