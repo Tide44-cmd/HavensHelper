@@ -11,6 +11,9 @@ import time
 from datetime import datetime, timedelta
 import calendar
 
+import io, asyncio, aiohttp, math
+from PIL import Image, ImageDraw, ImageFont
+
 load_dotenv()
 
 # Track the bot's start time
@@ -759,6 +762,139 @@ class TideTestModal(discord.ui.Modal, title="Tide Test Modal"):
 @bot.tree.command(name="tidetest", description="Opens a test modal with various input styles.")
 async def tidetest(interaction: discord.Interaction):
     await interaction.response.send_modal(TideTestModal())
+
+# ---------- tiny font helper (tries DejaVu, falls back to default) ----------
+def _load_font(size=28, bold=False):
+    try:
+        path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+        return ImageFont.truetype(path, size)
+    except Exception:
+        return ImageFont.load_default()
+
+# ---------- avatar fetch (async) ----------
+async def _fetch_avatar_bytes(session: aiohttp.ClientSession, member: discord.Member) -> bytes:
+    url = str(member.display_avatar.url)
+    async with session.get(url) as resp:
+        return await resp.read()
+
+# ---------- renderer for the table image ----------
+async def render_most_thanked_table(guild: discord.Guild, rows: list[dict]) -> discord.File:
+    # Canvas
+    W, H = 900, 720  # adjust height if you want more than 10 entries
+    bg = (22, 27, 34)   # dark card
+    fg = (230, 230, 230)
+    accent = (0, 200, 180)
+    sub = (170, 180, 190)
+    row_h = 64 + 16  # avatar + padding
+    top_margin = 90
+    im = Image.new("RGB", (W, H), bg)
+    draw = ImageDraw.Draw(im)
+
+    title_font = _load_font(36, bold=True)
+    name_font  = _load_font(28, bold=True)
+    small_font = _load_font(22, bold=False)
+
+    # Header
+    draw.text((40, 24), "Most thanked — Top 10", font=title_font, fill=(210, 240, 240))
+
+    # Bars scale
+    max_count = max((r["thank_count"] for r in rows), default=1)
+
+    # Pre-fetch avatars concurrently
+    async with aiohttp.ClientSession() as session:
+        avatars = []
+        for r in rows:
+            user_id = int(r["user_id"])
+            member = guild.get_member(user_id)
+            if member is None:
+                try:
+                    member = await guild.fetch_member(user_id)
+                except Exception:
+                    member = None
+            # Fallback: blank avatar if member not found
+            if member:
+                try:
+                    avatars.append(await _fetch_avatar_bytes(session, member))
+                except Exception:
+                    avatars.append(None)
+            else:
+                avatars.append(None)
+
+    # Draw rows
+    y = top_margin
+    bar_w, bar_h = 520, 10
+    for i, r in enumerate(rows[:10], start=1):
+        user_id = int(r["user_id"])
+        count = int(r["thank_count"])
+
+        # Try to get a display name from the guild; otherwise use stored name
+        member = guild.get_member(user_id)
+        if member is None:
+            try:
+                member = await guild.fetch_member(user_id)
+            except Exception:
+                member = None
+        display = member.display_name if member else (r.get("name") or f"User {user_id}")
+
+        # Avatar
+        x_avatar, y_avatar = 40, y - 8
+        if avatars[i-1]:
+            try:
+                pfp = Image.open(io.BytesIO(avatars[i-1])).convert("RGB").resize((64, 64))
+                im.paste(pfp, (x_avatar, y_avatar))
+            except Exception:
+                pass  # ignore bad images
+
+        # Rank + name + count
+        rank_color = (255, 193, 7) if i == 1 else (200, 200, 200)
+        draw.text((120, y - 18), f"#{i} • {display}", font=name_font, fill=rank_color)
+        draw.text((120, y + 12), f"{count} thanks", font=small_font, fill=sub)
+
+        # Progress bar vs. top
+        pct = 0 if max_count == 0 else min(1.0, count / max_count)
+        bx, by = 420, y + 20
+        draw.rectangle([bx, by, bx + bar_w, by + bar_h], fill=(60, 70, 80))
+        draw.rectangle([bx, by, bx + int(bar_w * pct), by + bar_h], fill=accent)
+
+        y += row_h
+
+    # Deliver as attachment
+    buf = io.BytesIO()
+    im.save(buf, format="PNG")
+    buf.seek(0)
+    return discord.File(buf, filename="mostthanked.png")
+
+# ---------- DB query helper ----------
+def _query_top_thanked(limit: int = 10):
+    sql = """
+        SELECT thanked_user_id AS user_id,
+               MAX(thanked_user_name) AS name,
+               COUNT(*) AS thank_count
+        FROM thanks
+        GROUP BY thanked_user_id
+        ORDER BY thank_count DESC
+        LIMIT ?
+    """
+    cur = conn.execute(sql, (limit,))
+    rows = cur.fetchall()
+    return [{"user_id": r[0], "name": r[1], "thank_count": r[2]} for r in rows]
+
+# ---------- Slash command ----------
+@bot.tree.command(name="mostthankedtable", description="Shows a top-10 Most Thanked image table.")
+async def most_thanked_table(interaction: discord.Interaction):
+    rows = _query_top_thanked(10)
+    if not rows:
+        await interaction.response.send_message("No thanks recorded yet.", ephemeral=True)
+        return
+
+    file = await render_most_thanked_table(interaction.guild, rows)
+    embed = discord.Embed(
+        title="Most Thanked — Top 10",
+        description="Recognition for helping others in the Haven.",
+        color=discord.Color.teal()
+    ).set_image(url="attachment://mostthanked.png")
+
+    await interaction.response.send_message(embed=embed, file=file)
 
 
 # --- Delete to here
