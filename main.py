@@ -763,6 +763,141 @@ class TideTestModal(discord.ui.Modal, title="Tide Test Modal"):
 async def tidetest(interaction: discord.Interaction):
     await interaction.response.send_modal(TideTestModal())
 
+# ---------- MOST THANKED TABLE TEST ----------
+# Build a human label like "All-time", "Last 30 days", or "Jul 2025"
+def _range_label(scope: str, month: int | None, year: int | None) -> str:
+    if scope == "last30":
+        return "Last 30 days"
+    if month and year:
+        return f"{calendar.month_abbr[month]} {year}"
+    return "All-time"
+
+# Compute WHERE clause + params for the chosen scope
+def _thanks_where(scope: str, month: int | None, year: int | None):
+    where = []
+    params = []
+    if scope == "last30":
+        # last 30 days rolling
+        dt_to = datetime.now(timezone.utc)
+        dt_from = dt_to - timedelta(days=30)
+        where.append("timestamp >= ? AND timestamp < ?")
+        params.extend([dt_from.strftime("%Y-%m-%d %H:%M:%S"), dt_to.strftime("%Y-%m-%d %H:%M:%S")])
+    elif month and year:
+        # calendar month
+        start = datetime(year, month, 1, tzinfo=timezone.utc)
+        # first day of next month
+        if month == 12:
+            end = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+        else:
+            end = datetime(year, month + 1, 1, tzinfo=timezone.utc)
+        where.append("timestamp >= ? AND timestamp < ?")
+        params.extend([start.strftime("%Y-%m-%d %H:%M:%S"), end.strftime("%Y-%m-%d %H:%M:%S")])
+    # else all-time → no filter
+    return (" WHERE " + " AND ".join(where)) if where else "", params
+
+def _query_top_thanked_paginated(limit: int, offset: int, scope: str, month: int | None, year: int | None):
+    where_sql, params = _thanks_where(scope, month, year)
+    sql = f"""
+        SELECT thanked_user_id AS user_id,
+               MAX(thanked_user_name) AS name,
+               COUNT(*) AS thank_count
+        FROM thanks
+        {where_sql}
+        GROUP BY thanked_user_id
+        ORDER BY thank_count DESC
+        LIMIT ? OFFSET ?
+    """
+    cur = conn.execute(sql, (*params, limit, offset))
+    rows = cur.fetchall()
+    return [{"user_id": r[0], "name": r[1], "thank_count": r[2]} for r in rows]
+
+def _count_distinct_thanked(scope: str, month: int | None, year: int | None) -> int:
+    where_sql, params = _thanks_where(scope, month, year)
+    sql = f"SELECT COUNT(DISTINCT thanked_user_id) FROM thanks {where_sql}"
+    return int(conn.execute(sql, params).fetchone()[0])
+
+# ===== View (buttons + select), only in all-time mode =========================
+
+class MostThankedView(discord.ui.View):
+    def __init__(self, guild: discord.Guild, scope: str = "all", page: int = 0):
+        super().__init__(timeout=300)
+        self.guild = guild
+        self.scope = scope            # "all" or "last30"
+        self.page = page              # 0-based
+        # Only show components in ALL-TIME mode
+        if self.scope in ("all", "last30"):
+            self._wire_components()
+
+    def _wire_components(self):
+        # Quick range select (only in all-time view)
+        self.add_item(self.RangeSelect(self))
+        # Prev/Next buttons (only useful in all-time/all-range modes)
+        self.add_item(self.PrevButton(self))
+        self.add_item(self.NextButton(self))
+
+    # -- Components ------------------------------------------------------------
+
+    class RangeSelect(discord.ui.Select):
+        def __init__(self, parent: "MostThankedView"):
+            self.parent = parent
+            options = [
+                discord.SelectOption(label="All-time", value="all", default=(parent.scope == "all")),
+                discord.SelectOption(label="Last 30 days", value="last30", default=(parent.scope == "last30")),
+            ]
+            super().__init__(placeholder="All-time", min_values=1, max_values=1, options=options)
+
+        async def callback(self, interaction: discord.Interaction):
+            await interaction.response.defer(thinking=True)
+            self.parent.scope = self.values[0]
+            self.parent.page = 0  # reset to first page
+            await self.parent._rerender(interaction)
+
+    class PrevButton(discord.ui.Button):
+        def __init__(self, parent: "MostThankedView"):
+            super().__init__(label="Prev", style=discord.ButtonStyle.secondary)
+            self.parent = parent
+
+        async def callback(self, interaction: discord.Interaction):
+            if self.parent.page > 0:
+                await interaction.response.defer(thinking=True)
+                self.parent.page -= 1
+                await self.parent._rerender(interaction)
+
+    class NextButton(discord.ui.Button):
+        def __init__(self, parent: "MostThankedView"):
+            super().__init__(label="Next", style=discord.ButtonStyle.secondary)
+            self.parent = parent
+
+        async def callback(self, interaction: discord.Interaction):
+            await interaction.response.defer(thinking=True)
+            self.parent.page += 1
+            await self.parent._rerender(interaction)
+
+    # -- Rerender --------------------------------------------------------------
+
+    async def _rerender(self, interaction: discord.Interaction):
+        limit = 10
+        offset = self.page * limit
+        total_users = _count_distinct_thanked(scope=self.scope, month=None, year=None)
+        rows = _query_top_thanked_paginated(limit, offset, scope=self.scope, month=None, year=None)
+
+        # Disable buttons if needed
+        start_index = offset + 1
+        end_index = offset + len(rows)
+        # Find our buttons in the view
+        for item in self.children:
+            if isinstance(item, MostThankedView.PrevButton):
+                item.disabled = (self.page == 0)
+            if isinstance(item, MostThankedView.NextButton):
+                item.disabled = (end_index >= total_users)
+
+        title = f"Most thanked — {_range_label(self.scope, None, None)}"
+        file = await render_most_thanked_table(self.guild, rows, title_text=title)
+
+        embed = discord.Embed(color=discord.Color.teal()).set_image(url="attachment://mostthanked.png")
+        await interaction.edit_original_response(embed=embed, attachments=[file], view=self)
+
+
 # ---------- tiny font helper (tries DejaVu, falls back to default) ----------
 def _load_font(size=28, bold=False):
     try:
@@ -778,7 +913,7 @@ async def _fetch_avatar_bytes(session: aiohttp.ClientSession, member: discord.Me
         return await resp.read()
 
 # ---------- renderer for the table image ----------
-async def render_most_thanked_table(guild: discord.Guild, rows: list[dict]) -> discord.File:
+async def render_most_thanked_table(guild: discord.Guild, rows: list[dict], title_text: str) -> discord.File:
     # Layout constants
     rows_to_draw = min(10, len(rows))
     W = 900
@@ -800,7 +935,7 @@ async def render_most_thanked_table(guild: discord.Guild, rows: list[dict]) -> d
     small_font = _load_font(22, bold=False)
 
     # Header
-    draw.text((40, 24), "Most thanked — Top 10", font=title_font, fill=(210, 240, 240))
+    draw.text((40, 24), title_text, font=title_font, fill=(210, 240, 240))
 
     # Scale for bars
     max_count = max((r["thank_count"] for r in rows[:rows_to_draw]), default=1)
@@ -890,31 +1025,58 @@ def _query_top_thanked(limit: int = 10):
     return [{"user_id": r[0], "name": r[1], "thank_count": r[2]} for r in rows]
 
 # ---------- Slash command ----------
-@bot.tree.command(name="mostthankedtable", description="Shows a top-10 Most Thanked image table.")
-async def most_thanked_table(interaction: discord.Interaction):
-    # 1) Tell Discord we're working so the token doesn't expire
+@bot.tree.command(name="mostthankedtable", description="Shows a Most Thanked leaderboard as an image.")
+@app_commands.describe(month="1-12 (optional)", year="e.g., 2025 (optional)")
+async def most_thanked_table(interaction: discord.Interaction, month: int | None = None, year: int | None = None):
     await interaction.response.defer(thinking=True)
 
-    # 2) Do the heavy work
-    rows = _query_top_thanked(10)
-    if not rows:
-        await interaction.followup.send("No thanks recorded yet.", ephemeral=True)
+    # Validate month/year pairing
+    if (month is None) ^ (year is None):
+        await interaction.followup.send("Please provide **both** month and year, or neither.", ephemeral=True)
+        return
+    if month is not None and not (1 <= month <= 12):
+        await interaction.followup.send("Month must be between 1 and 12.", ephemeral=True)
         return
 
-    try:
-        file = await render_most_thanked_table(interaction.guild, rows)
-        embed = discord.Embed(
-            title="Most Thanked — Top 10",
-            description="Recognition for helping others in the Haven.",
-            color=discord.Color.teal()
-        ).set_image(url="attachment://mostthanked.png")
+    if month and year:
+        # Specific month view (no components)
+        scope = "month"
+        rows = _query_top_thanked_paginated(limit=10, offset=0, scope=scope, month=month, year=year)
+        if not rows:
+            label = _range_label(scope, month, year)
+            await interaction.followup.send(f"No thanks recorded for **{label}**.", ephemeral=True)
+            return
 
-        # 3) Send the result AFTER deferring
+        title = f"Most thanked — {_range_label(scope, month, year)}"
+        file = await render_most_thanked_table(interaction.guild, rows, title_text=title)
+        embed = discord.Embed(color=discord.Color.teal()).set_image(url="attachment://mostthanked.png")
         await interaction.followup.send(embed=embed, file=file)
 
-    except Exception as e:
-        # Nice error so you see failures in-channel while testing
-        await interaction.followup.send(f"Rendering failed: `{e}`", ephemeral=True)
+    else:
+        # All-time view with components (dropdown + pagination)
+        view = MostThankedView(interaction.guild, scope="all", page=0)
+        # Prime the first render via the same code path used by callbacks
+        # (so buttons are properly enabled/disabled)
+        limit = 10
+        rows = _query_top_thanked_paginated(limit=limit, offset=0, scope="all", month=None, year=None)
+        if not rows:
+            await interaction.followup.send("No thanks recorded yet.", ephemeral=True)
+            return
+        total = _count_distinct_thanked(scope="all", month=None, year=None)
+        # Set initial disable state
+        for item in view.children:
+            if isinstance(item, MostThankedView.PrevButton):
+                item.disabled = True
+            if isinstance(item, MostThankedView.NextButton):
+                item.disabled = (len(rows) >= total and len(rows) <= 10)
+
+        title = f"Most thanked — {_range_label('all', None, None)}"
+        file = await render_most_thanked_table(interaction.guild, rows, title_text=title)
+        embed = discord.Embed(color=discord.Color.teal()).set_image(url="attachment://mostthanked.png")
+        await interaction.followup.send(embed=embed, file=file, view=view)
+
+
+
 
 
 
