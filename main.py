@@ -960,10 +960,10 @@ async def render_most_thanked_table(guild: discord.Guild, rows: list[dict], titl
     # Scale for bars
     max_count = max((r["thank_count"] for r in rows[:rows_to_draw]), default=1)
 
-    # Pre-fetch avatars
+    # Pre-fetch avatars (aligned 1:1 with the page rows)
     async with aiohttp.ClientSession() as session:
         avatar_bytes: list[bytes | None] = []
-        for i, r in enumerate(rows[:rows_to_draw], start=start_rank):
+        for r in rows[:rows_to_draw]:
             member = guild.get_member(int(r["user_id"]))
             if member is None:
                 try:
@@ -981,13 +981,13 @@ async def render_most_thanked_table(guild: discord.Guild, rows: list[dict], titl
 
     # Draw each row
     y = top_margin
-    # Progress bar config
     bar_x = 420
-    right_padding = 80  # space from right edge
-    bar_w = W - bar_x - right_padding  # dynamically size bar
+    right_padding = 80
+    bar_w = W - bar_x - right_padding
     bar_h = 10
-  
-    for i, r in enumerate(rows[:rows_to_draw], start=1):
+
+    for j, r in enumerate(rows[:rows_to_draw]):   # j = 0..N-1
+        display_rank = start_rank + j              # 1-based absolute rank
         user_id = int(r["user_id"])
         count = int(r["thank_count"])
 
@@ -1000,20 +1000,21 @@ async def render_most_thanked_table(guild: discord.Guild, rows: list[dict], titl
         display = member.display_name if member else (r.get("name") or f"User {user_id}")
 
         # Avatar
-        if avatar_bytes[i-1]:
+        if avatar_bytes[j]:
             try:
-                pfp = Image.open(io.BytesIO(avatar_bytes[i-1])).convert("RGB").resize((64, 64))
+                pfp = Image.open(io.BytesIO(avatar_bytes[j])).convert("RGB").resize((64, 64))
                 im.paste(pfp, (40, y - 8))
             except Exception:
                 pass
 
         # Rank + text
-        rank_color = (255, 193, 7) if i == 1 else (200, 200, 200)
-        draw.text((120, y - 18), f"#{i} • {display}", font=name_font, fill=rank_color)
+        # Highlight only absolute #1 (first page top); others get neutral color
+        rank_color = (255, 193, 7) if display_rank == 1 else (200, 200, 200)
+        draw.text((120, y - 18), f"#{display_rank} • {display}", font=name_font, fill=rank_color)
         draw.text((120, y + 12), f"{count} thanks", font=small_font, fill=sub)
 
         # Progress bar
-        max_bar_fraction = 0.85  # 85% of the available bar space
+        max_bar_fraction = 0.85
         pct = 0 if max_count == 0 else min(1.0, count / max_count)
         pct *= max_bar_fraction
         by = y + 20
@@ -1027,6 +1028,7 @@ async def render_most_thanked_table(guild: discord.Guild, rows: list[dict], titl
     im.save(buf, format="PNG")
     buf.seek(0)
     return discord.File(buf, filename="mostthanked.png")
+
 
 
 # ---------- DB query helper ----------
@@ -1094,10 +1096,6 @@ async def most_thanked_table(interaction: discord.Interaction, month: int | None
         file = await render_most_thanked_table(interaction.guild, rows, title_text=title)
         embed = discord.Embed(color=discord.Color.teal()).set_image(url="attachment://mostthanked.png")
         await interaction.followup.send(embed=embed, file=file, view=view)
-
-
-
-
 
 
 # --- Delete to here
