@@ -835,6 +835,21 @@ class MostThankedView(discord.ui.View):
         self.add_item(self.PrevButton(self))
         self.add_item(self.NextButton(self))
 
+    def _sync_controls(self, total_users: int, limit: int, offset: int, rows_len: int):
+        # Prev/Next enable/disable
+        for item in self.children:
+            if isinstance(item, MostThankedView.PrevButton):
+                item.disabled = (self.page == 0)
+            if isinstance(item, MostThankedView.NextButton):
+                item.disabled = (offset + rows_len >= total_users)
+
+        # Update select defaults + placeholder to match current scope
+        for item in self.children:
+            if isinstance(item, MostThankedView.RangeSelect):
+                for opt in item.options:
+                    opt.default = (opt.value == self.scope)
+                item.placeholder = "Last 30 days" if self.scope == "last30" else "All-time"
+
     # -- Components ------------------------------------------------------------
 
     class RangeSelect(discord.ui.Select):
@@ -881,6 +896,8 @@ class MostThankedView(discord.ui.View):
         total_users = _count_distinct_thanked(scope=self.scope, month=None, year=None)
         rows = _query_top_thanked_paginated(limit, offset, scope=self.scope, month=None, year=None)
 
+        self._sync_controls(total_users=total_users, limit=limit, offset=offset, rows_len=len(rows))
+
         # Disable buttons if needed
         start_index = offset + 1
         end_index = offset + len(rows)
@@ -892,7 +909,10 @@ class MostThankedView(discord.ui.View):
                 item.disabled = (end_index >= total_users)
 
         title = f"Most thanked — {_range_label(self.scope, None, None)}"
-        file = await render_most_thanked_table(self.guild, rows, title_text=title)
+        offset = self.page * limit
+        rows = _query_top_thanked_paginated(limit, offset, scope=self.scope, month=None, year=None)
+        file = await render_most_thanked_table(self.guild, rows,title_text=title, start_rank=offset + 1)
+        #file = await render_most_thanked_table(self.guild, rows, title_text=title)
 
         embed = discord.Embed(color=discord.Color.teal()).set_image(url="attachment://mostthanked.png")
         await interaction.edit_original_response(embed=embed, attachments=[file], view=self)
@@ -913,7 +933,7 @@ async def _fetch_avatar_bytes(session: aiohttp.ClientSession, member: discord.Me
         return await resp.read()
 
 # ---------- renderer for the table image ----------
-async def render_most_thanked_table(guild: discord.Guild, rows: list[dict], title_text: str) -> discord.File:
+async def render_most_thanked_table(guild: discord.Guild, rows: list[dict], title_text: str, start_rank: int = 1) -> discord.File:
     # Layout constants
     rows_to_draw = min(10, len(rows))
     W = 900
@@ -943,7 +963,7 @@ async def render_most_thanked_table(guild: discord.Guild, rows: list[dict], titl
     # Pre-fetch avatars
     async with aiohttp.ClientSession() as session:
         avatar_bytes: list[bytes | None] = []
-        for r in rows[:rows_to_draw]:
+        for i, r in enumerate(rows[:rows_to_draw], start=start_rank):
             member = guild.get_member(int(r["user_id"]))
             if member is None:
                 try:
@@ -1048,7 +1068,7 @@ async def most_thanked_table(interaction: discord.Interaction, month: int | None
             return
 
         title = f"Most thanked — {_range_label(scope, month, year)}"
-        file = await render_most_thanked_table(interaction.guild, rows, title_text=title)
+        file = await render_most_thanked_table(interaction.guild, rows, title_text=title, start_rank=1)
         embed = discord.Embed(color=discord.Color.teal()).set_image(url="attachment://mostthanked.png")
         await interaction.followup.send(embed=embed, file=file)
 
