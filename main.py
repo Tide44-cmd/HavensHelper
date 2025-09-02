@@ -718,6 +718,19 @@ async def health_check(interaction: discord.Interaction):
     
     await interaction.response.send_message(health_report)
 
+@bot.tree.command(name="syncname", description="Sync a member's display name across stored records.")
+async def sync_name(interaction: discord.Interaction, user: discord.Member):
+    uid = str(user.id)
+    uname = str(user)  # e.g., "fatjay4lisa#1234" or display name depending on your needs
+    # thanks table (both sides)
+    c.execute("UPDATE thanks SET thanked_user_name = ? WHERE thanked_user_id = ?", (uname, uid))
+    c.execute("UPDATE thanks SET thanking_user_name = ? WHERE thanking_user_id = ?", (uname, uid))
+    # helpers table too (optional but handy)
+    c.execute("UPDATE helpers SET user_name = ? WHERE user_id = ?", (uname, uid))
+    conn.commit()
+    await interaction.response.send_message(f"Synced names for {user.mention}.")
+
+
 
 # ---------- MOST THANKED TABLE TEST ----------
 # Build a human label like "All-time", "Last 30 days", or "Jul 2025"
