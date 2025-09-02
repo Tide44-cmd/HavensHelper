@@ -102,24 +102,27 @@ async def _game_autocomplete(interaction: discord.Interaction, current: str):
 @bot.tree.command(name="addgame", description="Adds a new game with optional description and guide URL.")
 async def add_game(interaction: discord.Interaction, game_name: str, description: str = None, guide_url: str = None):
     try:
+        # 1) Insert game
         c.execute(
             "INSERT INTO games (game_name, description, guide_url) VALUES (?, ?, ?)",
             (game_name, description, guide_url)
         )
+        game_id = c.lastrowid            # <-- Get it right here
         conn.commit()
 
-        # Log the add
-        c.execute("INSERT INTO logs (user, command, game_name) VALUES (?, ?, ?)",
-                  (str(interaction.user), "addgame", game_name))
-        conn.commit()
-
-        # NEW: auto-register the creator as a helper for this game
-        game_id = c.lastrowid
+        # 2) Auto-add creator as helper (uses the correct game_id)
         user_id = str(interaction.user.id)
         user_name = str(interaction.user)
         c.execute(
             "INSERT INTO helpers (user_id, user_name, game_id) VALUES (?, ?, ?)",
             (user_id, user_name, game_id)
+        )
+        conn.commit()
+
+        # 3) Log last (so lastrowid changes don’t matter)
+        c.execute(
+            "INSERT INTO logs (user, command, game_name) VALUES (?, ?, ?)",
+            (str(interaction.user), "addgame", game_name)
         )
         conn.commit()
 
@@ -129,6 +132,7 @@ async def add_game(interaction: discord.Interaction, game_name: str, description
         )
     except sqlite3.IntegrityError:
         await interaction.response.send_message(f"Game '{game_name}' is already in the list.")
+
 
 
 # Update game description
