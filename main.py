@@ -90,6 +90,14 @@ async def on_ready():
     await bot.tree.sync()  # Global sync
     print(f"Logged in as {bot.user}!")
 
+async def _game_autocomplete(interaction: discord.Interaction, current: str):
+    # Case-insensitive partial match; return up to 25
+    rows = conn.execute(
+        "SELECT game_name FROM games WHERE game_name LIKE ? ORDER BY game_name COLLATE NOCASE LIMIT 25",
+        (f"%{current}%",)
+    ).fetchall()
+    return [app_commands.Choice(name=r[0], value=r[0]) for r in rows]
+
 # Add a game
 @bot.tree.command(name="addgame", description="Adds a new game with optional description and guide URL.")
 async def add_game(interaction: discord.Interaction, game_name: str, description: str = None, guide_url: str = None):
@@ -121,8 +129,6 @@ async def add_game(interaction: discord.Interaction, game_name: str, description
         )
     except sqlite3.IntegrityError:
         await interaction.response.send_message(f"Game '{game_name}' is already in the list.")
-
-
 
 
 # Update game description
@@ -320,8 +326,6 @@ async def show_me(interaction: discord.Interaction):
         await interaction.response.send_message("You are not helping with any games.")
 
 
-
-
 # Show games a user helps with
 @bot.tree.command(name="showuser", description="Displays what games a specific user is helping with.")
 async def show_user(interaction: discord.Interaction, user: discord.Member):
@@ -340,7 +344,6 @@ async def show_user(interaction: discord.Interaction, user: discord.Member):
     else:
         await interaction.response.send_message(f"{user.mention} is not helping with any games.")
 
-
 # Show games with no helpers
 @bot.tree.command(name="nothelped", description="Displays games that have no helpers and no guides.")
 async def not_helped(interaction: discord.Interaction):
@@ -356,7 +359,6 @@ async def not_helped(interaction: discord.Interaction):
         await interaction.response.send_message(f"Games with no helpers and no guide:\n{game_list}")
     else:
         await interaction.response.send_message("All games either have helpers or guides.")
-
 
 # Show top helpers
 @bot.tree.command(name="tophelper", description="Shows a leaderboard of users helping with the most games.")
@@ -397,14 +399,6 @@ async def _send_long(interaction: discord.Interaction, header: str, lines: list[
             await interaction.response.send_message(current.rstrip())
         else:
             await interaction.followup.send(current.rstrip())
-
-async def _game_autocomplete(interaction: discord.Interaction, current: str):
-    # Case-insensitive partial match; return up to 25
-    rows = conn.execute(
-        "SELECT game_name FROM games WHERE game_name LIKE ? ORDER BY game_name COLLATE NOCASE LIMIT 25",
-        (f"%{current}%",)
-    ).fetchall()
-    return [app_commands.Choice(name=r[0], value=r[0]) for r in rows]
 
 
 # 1) gameswithhelp — only games that have ≥1 helper; add 📘 if they also have a guide
@@ -597,7 +591,6 @@ class GiveThanksModal(discord.ui.Modal, title="Give Thanks"):
 async def give_thanks_context(interaction: discord.Interaction, user: discord.Member):
     await interaction.response.send_modal(GiveThanksModal(user))
 
-
     
 @bot.tree.command(name="mostthanked", description="Shows the most thanked users.")
 async def most_thanked(interaction: discord.Interaction, month: int = None, year: int = None):
@@ -721,70 +714,6 @@ async def health_check(interaction: discord.Interaction):
     
     await interaction.response.send_message(health_report)
 
-# --- Modal with a variety of inputs (max 5 allowed by Discord) --- Delete from here
-class TideTestModal(discord.ui.Modal, title="Tide Test Modal"):
-    short_required = discord.ui.TextInput(
-        label="Short text (required)",
-        placeholder="Type at least 1 character…",
-        required=True,
-        min_length=1,
-        max_length=100,
-        style=discord.TextStyle.short,
-    )
-
-    short_optional = discord.ui.TextInput(
-        label="Short text (optional, with placeholder)",
-        placeholder="This one is optional",
-        required=False,
-        max_length=100,
-        style=discord.TextStyle.short,
-    )
-
-    short_prefilled = discord.ui.TextInput(
-        label="Short text (prefilled, min/max)",
-        default="42",
-        required=False,
-        min_length=1,
-        max_length=10,
-        style=discord.TextStyle.short,
-    )
-
-    para_optional = discord.ui.TextInput(
-        label="Paragraph (optional)",
-        placeholder="Multi-line input goes here…",
-        required=False,
-        max_length=1000,
-        style=discord.TextStyle.paragraph,
-    )
-
-    para_required = discord.ui.TextInput(
-        label="Paragraph (required, max 300)",
-        placeholder="Tell us something (up to 300 chars)…",
-        required=True,
-        max_length=300,
-        style=discord.TextStyle.paragraph,
-    )
-
-    async def on_submit(self, interaction: discord.Interaction):
-        # Build a neat echo of user inputs (no storage)
-        def show(val: str | None) -> str:
-            s = (val or "").strip()
-            return s if s else "—"
-
-        lines = [
-            "**Your Modal Inputs:**",
-            f"• Short (required): {show(str(self.short_required))}",
-            f"• Short (optional): {show(str(self.short_optional))}",
-            f"• Short (prefilled): {show(str(self.short_prefilled))}",
-            f"• Paragraph (optional): {show(str(self.para_optional))}",
-            f"• Paragraph (required): {show(str(self.para_required))}",
-        ]
-        await interaction.response.send_message("\n".join(lines), ephemeral=True)
-
-# --- Slash command to open the modal ---
-@bot.tree.command(name="tidetest", description="Opens a test modal with various input styles.")
-async def tidetest(interaction: discord.Interaction):
-    await interaction.response.send_modal(TideTestModal())
 
 # ---------- MOST THANKED TABLE TEST ----------
 # Build a human label like "All-time", "Last 30 days", or "Jul 2025"
