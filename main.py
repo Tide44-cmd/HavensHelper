@@ -94,34 +94,13 @@ async def on_ready():
 @bot.tree.command(name="addgame", description="Adds a new game with optional description and guide URL.")
 async def add_game(interaction: discord.Interaction, game_name: str, description: str = None, guide_url: str = None):
     try:
-        c.execute(
-            "INSERT INTO games (game_name, description, guide_url) VALUES (?, ?, ?)",
-            (game_name, description, guide_url)
-        )
+        c.execute("INSERT INTO games (game_name, description, guide_url) VALUES (?, ?, ?)", (game_name, description, guide_url))
         conn.commit()
-
-        # Log the add
-        c.execute("INSERT INTO logs (user, command, game_name) VALUES (?, ?, ?)",
-                  (str(interaction.user), "addgame", game_name))
+        c.execute("INSERT INTO logs (user, command, game_name) VALUES (?, ?, ?)", (str(interaction.user), "addgame", game_name))
         conn.commit()
-
-        # NEW: auto-register the creator as a helper for this game
-        game_id = c.lastrowid
-        user_id = str(interaction.user.id)
-        user_name = str(interaction.user)
-        c.execute(
-            "INSERT INTO helpers (user_id, user_name, game_id) VALUES (?, ?, ?)",
-            (user_id, user_name, game_id)
-        )
-        conn.commit()
-
-        await interaction.response.send_message(
-            f"Game '{game_name}' has been added.\n"
-            f"{interaction.user.mention} is now registered as a helper for this game."
-        )
+        await interaction.response.send_message(f"Game '{game_name}' has been added.")
     except sqlite3.IntegrityError:
         await interaction.response.send_message(f"Game '{game_name}' is already in the list.")
-
 
 
 
@@ -272,6 +251,7 @@ async def process_platform(interaction: discord.Interaction, game_name: str, pla
 
 # Remove user as helper for a game
 @bot.tree.command(name="removeme", description="Removes yourself as a helper for a specific game.")
+@app_commands.autocomplete(game_name=_game_autocomplete)
 async def remove_me(interaction: discord.Interaction, game_name: str):
     user_id = str(interaction.user.id)
     c.execute("SELECT id FROM games WHERE game_name = ?", (game_name,))
