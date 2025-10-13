@@ -107,32 +107,36 @@ class PaginatorView(discord.ui.View):
         self.index = 0
         self.message = None
 
-        self.add_item(self.PrevButton(self))
-        self.add_item(self.NextButton(self))
+        self.prev_btn = self.PrevButton(self)
+        self.next_btn = self.NextButton(self)
+        self.add_item(self.prev_btn)
+        self.add_item(self.next_btn)
 
-    async def send(self, interaction: discord.Interaction, *, ephemeral: bool = False):
-        content = f"**{self.title}**\n{self.pages[self.index]}"
-        await interaction.response.send_message(content, view=self, ephemeral=ephemeral)
-        self.message = await interaction.original_response()
-        self._sync_buttons()
+    def _footer(self) -> str:
+        total = len(self.pages)
+        pos = self.index + 1
+        edge = " • START" if self.index == 0 else (" • END" if self.index == total - 1 else "")
+        return f"\n\n_Page {pos}/{total}{edge}_"
 
-    async def update(self, interaction: discord.Interaction):
-        """Edit the existing message, compatible with both normal and deferred responses."""
-        content = f"**{self.title}**\n{self.pages[self.index]}"
-        if interaction.response.is_done():
-            # Already deferred or responded earlier — use edit_original_response
-            await interaction.edit_original_response(content=content, view=self)
-        else:
-            # Fresh component interaction — can use response.edit_message
-            await interaction.response.edit_message(content=content, view=self)
-        self._sync_buttons()
+    def _content(self) -> str:
+        return f"**{self.title}**\n{self.pages[self.index]}{self._footer()}"
 
     def _sync_buttons(self):
-        for item in self.children:
-            if isinstance(item, PaginatorView.PrevButton):
-                item.disabled = (self.index == 0)
-            elif isinstance(item, PaginatorView.NextButton):
-                item.disabled = (self.index >= len(self.pages) - 1)
+        total = len(self.pages)
+        self.prev_btn.disabled = (self.index == 0 or total <= 1)
+        self.next_btn.disabled = (self.index >= total - 1 or total <= 1)
+
+    async def send(self, interaction: discord.Interaction, *, ephemeral: bool = False):
+        self._sync_buttons()  # set disabled states before first render
+        await interaction.response.send_message(self._content(), view=self, ephemeral=ephemeral)
+        self.message = await interaction.original_response()
+
+    async def update(self, interaction: discord.Interaction):
+        self._sync_buttons()
+        if interaction.response.is_done():
+            await interaction.edit_original_response(content=self._content(), view=self)
+        else:
+            await interaction.response.edit_message(content=self._content(), view=self)
 
     class PrevButton(discord.ui.Button):
         def __init__(self, parent: "PaginatorView"):
@@ -140,12 +144,12 @@ class PaginatorView(discord.ui.View):
             self.parent = parent
 
         async def callback(self, interaction: discord.Interaction):
-            if self.parent.index > 0:
-                # Option A (no defer): just update
-                # Option B (defer for heavy ops): uncomment next line
-                # await interaction.response.defer(thinking=False)
-                self.parent.index -= 1
-                await self.parent.update(interaction)
+            if self.parent.index <= 0:
+                # Gracefully inform instead of throwing an interaction error.
+                await interaction.response.send_message("You're already at the **start** of the list.", ephemeral=True)
+                return
+            self.parent.index -= 1
+            await self.parent.update(interaction)
 
     class NextButton(discord.ui.Button):
         def __init__(self, parent: "PaginatorView"):
@@ -153,12 +157,12 @@ class PaginatorView(discord.ui.View):
             self.parent = parent
 
         async def callback(self, interaction: discord.Interaction):
-            if self.parent.index < len(self.parent.pages) - 1:
-                # Option A (no defer): just update
-                # Option B (defer for heavy ops): uncomment next line
-                # await interaction.response.defer(thinking=False)
-                self.parent.index += 1
-                await self.parent.update(interaction)
+            if self.parent.index >= len(self.parent.pages) - 1:
+                await interaction.response.send_message("You're already at the **end** of the list.", ephemeral=True)
+                return
+            self.parent.index += 1
+            await self.parent.update(interaction)
+
 
 def _make_pages(lines: list[str], per_page: int = 10) -> list[str]:
     pages = []
