@@ -1290,6 +1290,25 @@ async def most_thanked_table(interaction: discord.Interaction, month: int | None
         embed = discord.Embed(color=discord.Color.teal()).set_image(url="attachment://mostthanked.png")
         await interaction.followup.send(embed=embed, file=file, view=view)
 
+import random
+
+@bot.tree.command(name="removetide44", description="Attempts the impossible... remove Tide44.")
+async def remove_tide44(interaction: discord.Interaction):
+    stories = [
+        "The command echoes into the void... but the void whispers back: *'Permission denied.'*",
+        "Lightning strikes the database. The tables roll back. Tide44 remains, amused.",
+        "A chill wind sweeps through the bot — the legend cannot be deleted.",
+        "You tried to remove Tide44... and instead removed **your courage.**"
+    ]
+    main_story = (
+        "⚡ **A fool dares to challenge the eternal.** ⚡\n\n"
+        "Reality bends, your cursor flickers, and a cosmic 403 error appears.\n\n"
+        f"> *{random.choice(stories)}*\n\n"
+        "The bot laughs, restoring order to the digital plane."
+    )
+    await interaction.response.send_message(main_story)
+
+
 
 # --- Delete to here
 
