@@ -98,6 +98,104 @@ async def _game_autocomplete(interaction: discord.Interaction, current: str):
     ).fetchall()
     return [app_commands.Choice(name=r[0], value=r[0]) for r in rows]
 
+# ---------- Simple paginator (Prev/Next) ----------
+class PaginatorView(discord.ui.View):
+    def __init__(self, pages: list[str], title: str):
+        super().__init__(timeout=300)
+        self.pages = pages or ["*(no results)*"]
+        self.title = title
+        self.index = 0
+        self.message = None  # set after first send
+
+        # buttons
+        self.add_item(self.PrevButton(self))
+        self.add_item(self.NextButton(self))
+
+    async def send(self, interaction: discord.Interaction):
+        content = f"**{self.title}**\n{self.pages[self.index]}"
+        await interaction.response.send_message(content, view=self)
+        self.message = await interaction.original_response()
+        self._sync()
+
+    async def update(self, interaction: discord.Interaction):
+        content = f"**{self.title}**\n{self.pages[self.index]}"
+        await interaction.response.edit_message(content=content, view=self)
+        self._sync()
+
+    def _sync(self):
+        for item in self.children:
+            if isinstance(item, PaginatorView.PrevButton):
+                item.disabled = (self.index == 0)
+            if isinstance(item, PaginatorView.NextButton):
+                item.disabled = (self.index >= len(self.pages) - 1)
+
+    class PrevButton(discord.ui.Button):
+        def __init__(self, parent: "PaginatorView"):
+            super().__init__(label="Prev", style=discord.ButtonStyle.secondary)
+            self.parent = parent
+
+        async def callback(self, interaction: discord.Interaction):
+            if self.parent.index > 0:
+                await interaction.response.defer(thinking=False)
+                self.parent.index -= 1
+                await self.parent.update(interaction)
+
+    class NextButton(discord.ui.Button):
+        def __init__(self, parent: "PaginatorView"):
+            super().__init__(label="Next", style=discord.ButtonStyle.secondary)
+            self.parent = parent
+
+        async def callback(self, interaction: discord.Interaction):
+            if self.parent.index < len(self.parent.pages) - 1:
+                await interaction.response.defer(thinking=False)
+                self.parent.index += 1
+                await self.parent.update(interaction)
+
+
+def _make_pages(lines: list[str], per_page: int = 10) -> list[str]:
+    pages = []
+    for i in range(0, len(lines), per_page):
+        page = "\n".join(lines[i:i+per_page])
+        pages.append(page if page.strip() else "*(empty)*")
+    return pages
+
+
+# ---------- Confirm delete game ----------
+class ConfirmForgetView(discord.ui.View):
+    def __init__(self, requester_id: int, game_id: int, canonical_name: str):
+        super().__init__(timeout=60)
+        self.requester_id = requester_id
+        self.game_id = game_id
+        self.canonical_name = canonical_name
+
+    @discord.ui.button(label="Yes, remove", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.requester_id:
+            await interaction.response.send_message("Only the original requester can confirm.", ephemeral=True)
+            return
+
+        # Final safety check: if helpers list changed since prompt, re-check
+        cur = conn.execute("SELECT COUNT(DISTINCT user_id) FROM helpers WHERE game_id = ?", (self.game_id,))
+        current_helpers = int(cur.fetchone()[0])
+
+        # Delete helpers then game
+        conn.execute("DELETE FROM helpers WHERE game_id = ?", (self.game_id,))
+        conn.execute("DELETE FROM games   WHERE id = ?", (self.game_id,))
+        conn.commit()
+
+        await interaction.response.edit_message(
+            content=f"🗑️ Removed '{self.canonical_name}'. (It previously had {current_helpers} helper(s).)",
+            view=None
+        )
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.requester_id:
+            await interaction.response.send_message("Only the original requester can cancel.", ephemeral=True)
+            return
+        await interaction.response.edit_message(content="Removal cancelled.", view=None)
+
+
 # Add a game
 @bot.tree.command(name="addgame", description="Adds a new game with optional description and guide URL.")
 async def add_game(interaction: discord.Interaction, game_name: str, description: str = None, guide_url: str = None):
@@ -194,20 +292,63 @@ async def update_url(interaction: discord.Interaction, game_name: str, guide_url
 
 
 # Remove a game
-@bot.tree.command(name="removegame", description="Removes a game from the list.")
+TIDE44_ID = 420996360699904000  # override user id
+
+@bot.tree.command(name="removegame", description="Remove a game if you are a helper for it (or Tide44).")
+@app_commands.autocomplete(game_name=_game_autocomplete)
 async def remove_game(interaction: discord.Interaction, game_name: str):
-    c.execute("SELECT id FROM games WHERE game_name = ?", (game_name,))
-    game = c.fetchone()
-    if game:
-        game_id = game[0]
-        c.execute("DELETE FROM games WHERE id = ?", (game_id,))
-        c.execute("DELETE FROM helpers WHERE game_id = ?", (game_id,))
-        conn.commit()
-        c.execute("INSERT INTO logs (user, command, game_name) VALUES (?, ?, ?)", (str(interaction.user), "removegame", game_name))
-        conn.commit()
-        await interaction.response.send_message(f"Game '{game_name}' has been removed.")
-    else:
+    # Find game case-insensitively and fetch canonical name
+    game = conn.execute(
+        "SELECT id, game_name FROM games WHERE game_name = ? COLLATE NOCASE",
+        (game_name,)
+    ).fetchone()
+
+    if not game:
         await interaction.response.send_message(f"Game '{game_name}' not found.")
+        return
+
+    game_id, canonical_name = game
+
+    # Permission: must be helper on this game OR Tide44
+    uid = interaction.user.id
+    is_override = (uid == TIDE44_ID)
+    is_helper = bool(conn.execute(
+        "SELECT 1 FROM helpers WHERE game_id = ? AND user_id = ?",
+        (game_id, str(uid))
+    ).fetchone())
+
+    if not (is_override or is_helper):
+        await interaction.response.send_message(
+            "You can only remove a game if you are listed as a helper for it.",
+            ephemeral=True
+        )
+        return
+
+    # Count how many OTHER helpers exist for this game
+    others_count = conn.execute(
+        "SELECT COUNT(DISTINCT user_id) FROM helpers WHERE game_id = ? AND user_id <> ?",
+        (game_id, str(uid))
+    ).fetchone()[0]
+
+    # If requester is the only hunter (no others), remove immediately
+    if others_count == 0:
+        conn.execute("DELETE FROM helpers WHERE game_id = ?", (game_id,))
+        conn.execute("DELETE FROM games   WHERE id = ?", (game_id,))
+        conn.commit()
+        await interaction.response.send_message(
+            f"Removed '{canonical_name}'. (You were the only hunter.)"
+        )
+        return
+
+    # Otherwise, ask for confirmation (shows # of other hunters)
+    view = ConfirmForgetView(requester_id=uid, game_id=game_id, canonical_name=canonical_name)
+    await interaction.response.send_message(
+        f"Are you sure you want to remove '{canonical_name}'? "
+        f"{others_count} other user(s) are still helping this game.",
+        view=view,
+        ephemeral=True
+    )
+
 
 
 # Rename a game
@@ -308,45 +449,120 @@ async def set_status(interaction: discord.Interaction, status: str):
 
 
 # Show games user helps with
-@bot.tree.command(name="showme", description="Displays all the games you're helping with.")
+@bot.tree.command(name="showme", description="Displays what games you are helping with (paginated).")
 async def show_me(interaction: discord.Interaction):
     user_id = str(interaction.user.id)
-    c.execute('''
-        SELECT g.game_name, g.description, h.status 
-        FROM games g 
-        JOIN helpers h ON g.id = h.game_id 
+    rows = conn.execute("""
+        SELECT g.game_name, h.status
+        FROM games g
+        JOIN helpers h ON g.id = h.game_id
         WHERE h.user_id = ?
-        ORDER BY g.game_name ASC
-    ''', (user_id,))
-    games = c.fetchall()
-    
-    if games:
-        game_list = "\n".join([
-            f"{game[0]} {'🟢' if game[2] == 'green' else '🟠' if game[2] == 'amber' else '🔴'} - {game[1] if game[1] else 'No description'}"
-            for game in games
-        ])
-        await interaction.response.send_message(f"Games you help with:\n{game_list}")
-    else:
-        await interaction.response.send_message("You are not helping with any games.")
+        ORDER BY g.game_name COLLATE NOCASE
+    """, (user_id,)).fetchall()
+
+    if not rows:
+        await interaction.response.send_message("You are not helping with any games yet.")
+        return
+
+    def s_emoji(s: str | None) -> str:
+        if not s: return ""
+        s = s.lower()
+        return "🟢" if s == "green" else "🟡" if s in ("amber", "yellow") else "🔴" if s == "red" else ""
+
+    lines = [f"{name} {s_emoji(status)}".rstrip() for (name, status) in rows]
+    pages = _make_pages(lines, per_page=10)
+    view = PaginatorView(pages, title=f"Games {interaction.user.display_name} helps with")
+    await view.send(interaction)
+
+
+@bot.tree.command(name="showmedescription", description="Displays your games with descriptions (paginated).")
+async def show_me_description(interaction: discord.Interaction):
+    user_id = str(interaction.user.id)
+    rows = conn.execute("""
+        SELECT g.game_name, g.description, h.status
+        FROM games g
+        JOIN helpers h ON g.id = h.game_id
+        WHERE h.user_id = ?
+        ORDER BY g.game_name COLLATE NOCASE
+    """, (user_id,)).fetchall()
+
+    if not rows:
+        await interaction.response.send_message("You are not helping with any games yet.")
+        return
+
+    def s_emoji(s: str | None) -> str:
+        if not s: return ""
+        s = s.lower()
+        return "🟢" if s == "green" else "🟡" if s in ("amber", "yellow") else "🔴" if s == "red" else ""
+
+    lines = []
+    for (name, desc, status) in rows:
+        desc_txt = (desc or "").strip() or "No description"
+        lines.append(f"**{name}** {s_emoji(status)}\n{desc_txt}")
+
+    pages = _make_pages(lines, per_page=6)  # fewer per page since entries are longer
+    view = PaginatorView(pages, title=f"Games {interaction.user.display_name} helps with (incl. descriptions)")
+    await view.send(interaction)
 
 
 # Show games a user helps with
-@bot.tree.command(name="showuser", description="Displays what games a specific user is helping with.")
+@bot.tree.command(name="showuser", description="Displays what games a specific user is helping with (paginated).")
 async def show_user(interaction: discord.Interaction, user: discord.Member):
     user_id = str(user.id)
-    c.execute('''SELECT g.game_name, g.description, h.status 
-                 FROM games g 
-                 JOIN helpers h ON g.id = h.game_id 
-                 WHERE h.user_id = ?''', (user_id,))
-    games = c.fetchall()
-    if games:
-        game_list = "\n".join([
-            f"{game[0]} {'🟢' if game[2] == 'green' else '🟠' if game[2] == 'amber' else '🔴'} - {game[1] if game[1] else 'No description'}"
-            for game in games
-        ])
-        await interaction.response.send_message(f"Games {user.name} helps with:\n{game_list}")
-    else:
+    rows = conn.execute("""
+        SELECT g.game_name, h.status
+        FROM games g
+        JOIN helpers h ON g.id = h.game_id
+        WHERE h.user_id = ?
+        ORDER BY g.game_name COLLATE NOCASE
+    """, (user_id,)).fetchall()
+
+    if not rows:
         await interaction.response.send_message(f"{user.mention} is not helping with any games.")
+        return
+
+    # status bubbles
+    def s_emoji(s: str | None) -> str:
+        if not s: return ""
+        s = s.lower()
+        return "🟢" if s == "green" else "🟡" if s in ("amber", "yellow") else "🔴" if s == "red" else ""
+
+    lines = [f"{name} {s_emoji(status)}".rstrip() for (name, status) in rows]
+    pages = _make_pages(lines, per_page=10)
+    view = PaginatorView(pages, title=f"Games {user.display_name} helps with")
+    await view.send(interaction)
+
+
+@bot.tree.command(name="showuserdescription", description="Like showuser, but includes the game description (paginated).")
+async def show_user_description(interaction: discord.Interaction, user: discord.Member):
+    user_id = str(user.id)
+    rows = conn.execute("""
+        SELECT g.game_name, g.description, h.status
+        FROM games g
+        JOIN helpers h ON g.id = h.game_id
+        WHERE h.user_id = ?
+        ORDER BY g.game_name COLLATE NOCASE
+    """, (user_id,)).fetchall()
+
+    if not rows:
+        await interaction.response.send_message(f"{user.mention} is not helping with any games.")
+        return
+
+    def s_emoji(s: str | None) -> str:
+        if not s: return ""
+        s = s.lower()
+        return "🟢" if s == "green" else "🟡" if s in ("amber", "yellow") else "🔴" if s == "red" else ""
+
+    lines = []
+    for (name, desc, status) in rows:
+        desc_txt = desc.strip() if (desc and str(desc).strip()) else "No description"
+        lines.append(f"**{name}** {s_emoji(status)}\n{desc_txt}")
+
+    pages = _make_pages(lines, per_page=6)  # fewer per page since these are longer
+    view = PaginatorView(pages, title=f"Games {user.display_name} helps with (incl. descriptions)")
+    await view.send(interaction)
+
+
 
 # Show games with no helpers
 @bot.tree.command(name="nothelped", description="Displays games that have no helpers and no guides.")
