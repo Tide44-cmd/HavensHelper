@@ -105,28 +105,33 @@ class PaginatorView(discord.ui.View):
         self.pages = pages or ["*(no results)*"]
         self.title = title
         self.index = 0
-        self.message = None  # set after first send
+        self.message = None
 
-        # buttons
         self.add_item(self.PrevButton(self))
         self.add_item(self.NextButton(self))
 
-    async def send(self, interaction: discord.Interaction):
+    async def send(self, interaction: discord.Interaction, *, ephemeral: bool = False):
         content = f"**{self.title}**\n{self.pages[self.index]}"
-        await interaction.response.send_message(content, view=self)
+        await interaction.response.send_message(content, view=self, ephemeral=ephemeral)
         self.message = await interaction.original_response()
-        self._sync()
+        self._sync_buttons()
 
     async def update(self, interaction: discord.Interaction):
+        """Edit the existing message, compatible with both normal and deferred responses."""
         content = f"**{self.title}**\n{self.pages[self.index]}"
-        await interaction.response.edit_message(content=content, view=self)
-        self._sync()
+        if interaction.response.is_done():
+            # Already deferred or responded earlier — use edit_original_response
+            await interaction.edit_original_response(content=content, view=self)
+        else:
+            # Fresh component interaction — can use response.edit_message
+            await interaction.response.edit_message(content=content, view=self)
+        self._sync_buttons()
 
-    def _sync(self):
+    def _sync_buttons(self):
         for item in self.children:
             if isinstance(item, PaginatorView.PrevButton):
                 item.disabled = (self.index == 0)
-            if isinstance(item, PaginatorView.NextButton):
+            elif isinstance(item, PaginatorView.NextButton):
                 item.disabled = (self.index >= len(self.pages) - 1)
 
     class PrevButton(discord.ui.Button):
@@ -136,7 +141,9 @@ class PaginatorView(discord.ui.View):
 
         async def callback(self, interaction: discord.Interaction):
             if self.parent.index > 0:
-                await interaction.response.defer(thinking=False)
+                # Option A (no defer): just update
+                # Option B (defer for heavy ops): uncomment next line
+                # await interaction.response.defer(thinking=False)
                 self.parent.index -= 1
                 await self.parent.update(interaction)
 
@@ -147,10 +154,11 @@ class PaginatorView(discord.ui.View):
 
         async def callback(self, interaction: discord.Interaction):
             if self.parent.index < len(self.parent.pages) - 1:
-                await interaction.response.defer(thinking=False)
+                # Option A (no defer): just update
+                # Option B (defer for heavy ops): uncomment next line
+                # await interaction.response.defer(thinking=False)
                 self.parent.index += 1
                 await self.parent.update(interaction)
-
 
 def _make_pages(lines: list[str], per_page: int = 10) -> list[str]:
     pages = []
