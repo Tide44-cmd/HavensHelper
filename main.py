@@ -717,73 +717,132 @@ async def bot_version(interaction: discord.Interaction):
     await interaction.response.send_message(version_info)
 
     
-@bot.tree.command(name="help", description="Displays a list of all available commands.")
+class HelpView(discord.ui.View):
+    def __init__(self, is_admin: bool):
+        super().__init__(timeout=300)
+        self.is_admin = is_admin
+
+        # Row 1
+        self.add_item(self.SectionButton("Quick Start", "quick"))
+        self.add_item(self.SectionButton("Helping", "helping"))
+        self.add_item(self.SectionButton("Finding", "finding"))
+        # Row 2
+        self.add_item(self.SectionButton("Thanks", "thanks", row=1))
+        self.add_item(self.SectionButton("Info", "info", row=1))
+        self.add_item(self.SectionButton("Fun", "fun", row=1))
+        if is_admin:
+            self.add_item(self.SectionButton("Admin", "admin", row=1))
+
+    class SectionButton(discord.ui.Button):
+        def __init__(self, label: str, key: str, row: int = 0):
+            super().__init__(label=label, style=discord.ButtonStyle.primary, row=row)
+            self.key = key
+
+        async def callback(self, interaction: discord.Interaction):
+            embed = build_help_embed(self.key, is_admin=interaction.user.guild_permissions.administrator)
+            if interaction.response.is_done():
+                await interaction.edit_original_response(embed=embed, view=self.view)
+            else:
+                await interaction.response.edit_message(embed=embed, view=self.view)
+
+
+def build_help_embed(section: str, is_admin: bool) -> discord.Embed:
+    """Builds a compact embed for the requested /help section (≤2000 chars total message)."""
+    title = "Haven’s Helper — Help"
+    base_note = "Use the buttons below to switch sections."
+    e = discord.Embed(color=0x2b2d31)
+
+    if section == "quick":
+        e.title = title
+        e.description = (
+            "**Quick Start**\n"
+            "1) Add a game you can help with: `/addgame`\n"
+            "2) Add yourself as a helper: `/addme`\n"
+            "3) See your list: `/showme`\n"
+            "4) Inspect a game: `/showgame`\n"
+            "5) Browse all with helpers: `/gameswithhelp`\n"
+            "6) Browse all with guides: `/gameswithguides`\n\n"
+            f"{base_note}"
+        )
+        return e
+
+    if section == "helping":
+        e.title = "Helping (offer your help)"
+        e.description = (
+            "• `/addgame \"name\" [description] [guide_url]`\n"
+            "• `/updatedescription \"name\" \"desc\"`\n"
+            "• `/updateurl \"name\" \"url\"`\n"
+            "• `/renamegame \"old\" \"new\"`\n"
+            "• `/addme \"name\"` / `/removeme \"name\"`\n"
+            "• `/setstatus green|amber|red`\n"
+            "• `/removegame \"name\"` *(if you’re a helper or Tide44; confirms if others remain)*\n\n"
+            f"{base_note}"
+        )
+        return e
+
+    if section == "finding":
+        e.title = "Finding (seek help & explore)"
+        e.description = (
+            "• `/showme` / `/showmedescription`\n"
+            "• `/showuser @user` / `/showuserdescription @user`\n"
+            "• `/showgame \"name\"`\n"
+            "• `/gameswithhelp` / `/gameswithguides`\n"
+            "• `/nothelped` *(no helpers & no guide)*\n"
+            "• `/tophelper` *(leaderboard)*\n\n"
+            f"{base_note}"
+        )
+        return e
+
+    if section == "thanks":
+        e.title = "Thanks & Recognition"
+        e.description = (
+            "• `/givethanks @user [game] [message]`\n"
+            "• `/mostthanked [month] [year]`\n"
+            "• `/mostthankedfull` *(all-time)*\n"
+            "• `/mostthankedtable [month] [year]` *(image)*\n"
+            "• `/showfeedback @user`\n\n"
+            f"{base_note}"
+        )
+        return e
+
+    if section == "info":
+        e.title = "Bot Info & Maintenance"
+        e.description = (
+            "• `/botversion`\n"
+            "• `/healthcheck`\n"
+            "• `/syncname @user`\n\n"
+            f"{base_note}"
+        )
+        return e
+
+    if section == "fun":
+        e.title = "Fun"
+        e.description = (
+            "• `/removetide44` — Attempt to delete a god. Witness the end of the log.\n\n"
+            f"{base_note}"
+        )
+        return e
+
+    if section == "admin" and is_admin:
+        e.title = "Admin"
+        e.description = (
+            "• `/deleteuser @user`\n"
+            "• `/deleteusermanual \"username#discrim\"`\n\n"
+            f"{base_note}"
+        )
+        return e
+
+    # Fallback to quick
+    return build_help_embed("quick", is_admin=is_admin)
+
+
+@bot.tree.command(name="help", description="Shows Quick Start and section buttons.")
 async def help_command(interaction: discord.Interaction):
     is_admin = bool(interaction.guild and interaction.user.guild_permissions.administrator)
+    view = HelpView(is_admin=is_admin)
+    embed = build_help_embed("quick", is_admin=is_admin)
+    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
-    # Status legend and pagination note
-    legend = (
-        "**Haven’s Helper – Commands**\n"
-        "_Status:_ 🟢 available • 🟡 limited • 🔴 unavailable\n"
-        "_Lists:_ Use **Prev/Next** buttons. Footer shows **Page X/Y • START/END**.\n"
-    )
-
-    sections: list[str] = [legend]
-
-    # --- Game Management ---
-    sections.append(
-        "**Game Management**\n"
-        "• `/addgame \"game name\" [description] [guide_url]` – Add a game and auto-register yourself as helper. "
-        "Also logs the action. :contentReference[oaicite:0]{index=0}\n"
-        "• `/updatedescription \"game name\" \"description\"` – Update game description. :contentReference[oaicite:1]{index=1}\n"
-        "• `/updateurl \"game name\" \"url\"` – Add/replace a guide URL. :contentReference[oaicite:2]{index=2}\n"
-        "• `/renamegame \"old\" \"new\"` – Rename a game. :contentReference[oaicite:3]{index=3}\n"
-        "• `/removegame \"game name\"` – Remove a game (only if you’re a helper for it or Tide44). "
-        "Asks for confirmation if others still help it. :contentReference[oaicite:4]{index=4}"
-    )
-
-    # --- Helper Management ---
-    sections.append(
-        "**Helper Management**\n"
-        "• `/addme \"game name\"` – Register yourself as a helper. :contentReference[oaicite:5]{index=5}\n"
-        "• `/removeme \"game name\"` – Remove yourself as helper. :contentReference[oaicite:6]{index=6}\n"
-        "• `/setstatus green|amber|red` – Set your availability. :contentReference[oaicite:7]{index=7}"
-    )
-
-    # --- Insights & Discovery ---
-    sections.append(
-        "**Insights & Discovery**\n"
-        "• `/showme` – Your games (paginated, no descriptions). :contentReference[oaicite:8]{index=8}\n"
-        "• `/showmedescription` – Your games with descriptions (paginated). :contentReference[oaicite:9]{index=9}\n"
-        "• `/showuser @user` – A user’s games (paginated, no descriptions). :contentReference[oaicite:10]{index=10}\n"
-        "• `/showuserdescription @user` – A user’s games with descriptions (paginated). :contentReference[oaicite:11]{index=11}\n"
-        "• `/showgame \"game name\"` – Game details + helpers (case-insensitive). :contentReference[oaicite:12]{index=12}\n"
-        "• `/gameswithhelp` – All games that currently have helpers (📘 if a guide exists). :contentReference[oaicite:13]{index=13}\n"
-        "• `/gameswithguides` – All games with guides (👥 if helpers also exist). :contentReference[oaicite:14]{index=14}\n"
-        "• `/nothelped` – Games with no helpers and no guide. :contentReference[oaicite:15]{index=15}\n"
-        "• `/tophelper` – Leaderboard of users helping the most games. :contentReference[oaicite:16]{index=16}"
-    )
-
-    # --- Thanks & Recognition ---
-    sections.append(
-        "**Thanks & Recognition**\n"
-        "• `/givethanks @user [game] [message]` – Thank someone (prevents self-thanks). :contentReference[oaicite:17]{index=17}\n"
-        "• `/mostthanked [month] [year]` – Top thanked users (period or all-time). :contentReference[oaicite:18]{index=18}\n"
-        "• `/mostthankedfull` – Full all-time list (no limit). :contentReference[oaicite:19]{index=19}\n"
-        "• `/mostthankedtable [month] [year]` – Image leaderboard with pagination UI. :contentReference[oaicite:20]{index=20}\n"
-        "• `/showfeedback @user` – Last 10 feedback messages for a user. :contentReference[oaicite:21]{index=21}"
-    )
-
-    # --- Bot Info & Maintenance ---
-    sections.append(
-        "**Bot Info & Maintenance**\n"
-        "• `/botversion` – Bot version & repo. :contentReference[oaicite:22]{index=22}\n"
-        "• `/healthcheck` – Uptime, DB status, registered command count. :contentReference[oaicite:23]{index=23}\n"
-        "• `/syncname @user` – Sync a member’s stored name across helpers/thanks. :contentReference[oaicite:24]{index=24}"
-    )
-
-    help_text = "\n\n".join(sections)
-    await interaction.response.send_message(help_text, ephemeral=True)
 
 
 # Shared logic stays here
