@@ -782,17 +782,6 @@ async def help_command(interaction: discord.Interaction):
         "• `/syncname @user` – Sync a member’s stored name across helpers/thanks. :contentReference[oaicite:24]{index=24}"
     )
 
-    # --- Admin only ---
-    if is_admin:
-        sections.append(
-            "**Admin Only**\n"
-            "• `/deleteuser @user` – Remove a user from all games. :contentReference[oaicite:25]{index=25}\n"
-            "• `/deleteusermanual \"username#discrim\"` – Remove by name (manual). :contentReference[oaicite:26]{index=26}"
-        )
-
-    # --- Fun / Easter egg ---
-    sections.append("**Fun**\n• `/removetide44` – Attempt to remove a god. Witness the end of the log. *(You can try…)*")
-
     help_text = "\n\n".join(sections)
     await interaction.response.send_message(help_text, ephemeral=True)
 
