@@ -1,4 +1,4 @@
-gamesimport discord
+import discord
 from discord.ext import commands
 from discord import ButtonStyle
 from discord.ui import Button, View
