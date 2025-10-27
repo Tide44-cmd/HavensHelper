@@ -636,32 +636,21 @@ async def _send_long(interaction: discord.Interaction, header: str, lines: list[
 # 1) gameswithhelp — only games that have ≥1 helper; add 📘 if they also have a guide
 @bot.tree.command(name="gamestohelpfull", description="Displays the full list of games with helpers.")
 async def games_to_help_full(interaction: discord.Interaction):
-    rows = conn.execute("""
-        SELECT g.game_name,
-               CASE WHEN g.guide_url IS NOT NULL AND g.guide_url != '' THEN 1 ELSE 0 END AS has_guide,
-               COUNT(h.user_id) AS helper_count
-        FROM games g
-        LEFT JOIN helpers h ON g.id = h.game_id
-        GROUP BY g.id
-        HAVING helper_count > 0
-        ORDER BY g.game_name COLLATE NOCASE
-    """).fetchall()
+    sql = """
+    SELECT g.game_name, g.guide_url
+    FROM games g
+    WHERE EXISTS (SELECT 1 FROM helpers h WHERE h.game_id = g.id)
+    ORDER BY g.game_name COLLATE NOCASE;
+    """
+    rows = conn.execute(sql).fetchall()
 
     if not rows:
         await interaction.response.send_message("No games currently have helpers.")
         return
 
-    def marker(has_guide): return "📘" if has_guide else ""
-
-    lines = [f"{name} 👥{helpers}{marker(has_guide)}" for name, has_guide, helpers in rows]
-
-    # Avoid exceeding Discord's 2000 char limit
-    chunks = [lines[i:i + 40] for i in range(0, len(lines), 40)]
-    output = "\n".join("\n".join(chunk) for chunk in chunks)
-
-    await interaction.response.send_message(
-        f"**Games with Helpers (Full List)**\n{output[:1990]}"
-    )
+    lines = [f"{name}{' 📘' if (guide_url and str(guide_url).strip()) else ''}"
+             for (name, guide_url) in rows]
+    await _send_long(interaction, "**Games with Helpers** (📘 = has guide)", lines)
 
 
 class GamesWithHelpView(discord.ui.View):
