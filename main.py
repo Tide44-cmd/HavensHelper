@@ -901,43 +901,62 @@ def build_help_embed(section: str, is_admin: bool) -> discord.Embed:
     if section == "finding":
         e.title = "Finding (seek help & explore)"
         e.description = (
-            "• `/showme` / `/showmedescription`\n"
-            "• `/showuser @user` / `/showuserdescription @user`\n"
-            "• `/showgame \"name\"`\n"
-            "• `/gameswithhelp` / `/gameswithguides`\n"
-            "• `/nothelped` *(no helpers & no guide)*\n"
-            "• `/tophelper` *(leaderboard)*\n\n"
-            f"{base_note}"
+            "• View your own games (with or without descriptions):\n"
+            " `/showme` or `/showmedescription`\n\n"
+            "• See what another user is helping with:\n"
+            " `/showuser @user` or `/showuserdescription @user`\n\n"
+            "• View helpers and guide info for a specific game:\n"
+            " `/showgame \"name\"`\n\n"
+            "• Browse all games by letter range:\n"
+            " `/gameswithhelp`\n\n"
+            "• View every game with helpers (full list):\n"
+            " `/gamestohelpfull`\n\n"
+            "• Filter games that start with a specific letter:\n"
+            " `/gamesbyletter [A–Z]`\n\n"
+            "• See which games have guides available:\n"
+            " `/gameswithguides`\n\n"
+            "• Find games that currently have no helpers or guides:\n"
+            " `/nothelped`\n\n"
+            "• Check who helps the most games:\n"
+            " `/tophelper`"
+        
         )
         return e
 
     if section == "thanks":
         e.title = "Thanks & Recognition"
         e.description = (
-            "• `/givethanks @user [game] [message]`\n"
-            "• `/mostthanked [month] [year]`\n"
-            "• `/mostthankedfull` *(all-time)*\n"
-            "• `/mostthankedtable [month] [year]` *(image)*\n"
-            "• `/showfeedback @user`\n\n"
-            f"{base_note}"
+            "• Thank another user for their help:\n"
+            " `/givethanks @user [game] [message]`\n\n"
+            "• View the most thanked users for a specific month or year:\n"
+            " `/mostthanked [month] [year]`\n\n"
+            "• Show the all-time leaderboard of most thanked helpers:\n"
+            " `/mostthankedfull`\n\n"
+            "• Display a graphical table of top thanked users:\n"
+            " `/mostthankedtable [month] [year]`\n\n"
+            "• View the latest feedback and thanks received by a user:\n"
+            " `/showfeedback @user`"
         )
+
         return e
 
     if section == "info":
         e.title = "Bot Info & Maintenance"
         e.description = (
-            "• `/botversion`\n"
-            "• `/healthcheck`\n"
-            "• `/syncname @user`\n\n"
-            f"{base_note}"
+            "• Check the bot version and GitHub repository:\n"
+            " `/botversion`\n\n"
+            "• Run a quick system health check and uptime test:\n"
+            " `/healthcheck`\n\n"
+            "• Sync a user’s stored name across all helper and thanks records:\n"
+            " `/syncname @user`"
         )
         return e
 
     if section == "fun":
         e.title = "Fun"
         e.description = (
-            "• `/removetide44` — Attempt to delete a god. Witness the end of the log.\n\n"
-            f"{base_note}"
+            "• Attempt to delete a god Tide44 : "
+            " `/removetide44`\n"
         )
         return e
 
