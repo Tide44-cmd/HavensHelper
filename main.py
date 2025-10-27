@@ -634,23 +634,141 @@ async def _send_long(interaction: discord.Interaction, header: str, lines: list[
 
 
 # 1) gameswithhelp — only games that have ≥1 helper; add 📘 if they also have a guide
-@bot.tree.command(name="gameswithhelp", description="Lists all games that currently have helpers (adds 📘 if a guide also exists).")
-async def games_with_help(interaction: discord.Interaction):
-    sql = """
-    SELECT g.game_name, g.guide_url
-    FROM games g
-    WHERE EXISTS (SELECT 1 FROM helpers h WHERE h.game_id = g.id)
-    ORDER BY g.game_name COLLATE NOCASE;
-    """
-    rows = conn.execute(sql).fetchall()
+@bot.tree.command(name="gamestohelpfull", description="Displays the full list of games with helpers.")
+async def games_to_help_full(interaction: discord.Interaction):
+    rows = conn.execute("""
+        SELECT g.game_name,
+               CASE WHEN g.guide_url IS NOT NULL AND g.guide_url != '' THEN 1 ELSE 0 END AS has_guide,
+               COUNT(h.user_id) AS helper_count
+        FROM games g
+        LEFT JOIN helpers h ON g.id = h.game_id
+        WHERE helper_count > 0
+        GROUP BY g.id
+        ORDER BY g.game_name COLLATE NOCASE
+    """).fetchall()
 
     if not rows:
         await interaction.response.send_message("No games currently have helpers.")
         return
 
-    lines = [f"{name}{' 📘' if (guide_url and str(guide_url).strip()) else ''}"
-             for (name, guide_url) in rows]
-    await _send_long(interaction, "**Games with Helpers** (📘 = has guide)", lines)
+    lines = []
+    for name, has_guide, count in rows:
+        marker = "📘" if has_guide else ""
+        lines.append(f"{name} 👥{count} {marker}".strip())
+
+    chunks = [lines[i:i+30] for i in range(0, len(lines), 30)]
+    text = "\n".join(["\n".join(chunk) for chunk in chunks])
+    await interaction.response.send_message(f"**Games with Helpers (Full List)**\n{text[:1990]}")
+
+class GamesWithHelpView(discord.ui.View):
+    def __init__(self, sections: dict[str, list[str]]):
+        super().__init__(timeout=300)
+        self.sections = sections
+        self.keys = list(sections.keys())
+
+        # Add buttons dynamically by letter group
+        for idx, key in enumerate(self.keys):
+            self.add_item(self.GroupButton(label=key, key=key, row=idx // 3))
+
+    class GroupButton(discord.ui.Button):
+        def __init__(self, label: str, key: str, row: int = 0):
+            super().__init__(label=label, style=discord.ButtonStyle.primary, row=row)
+            self.key = key
+
+        async def callback(self, interaction: discord.Interaction):
+            games = self.view.sections[self.key]
+            display = "\n".join(games) if games else "_No games in this range._"
+            embed = discord.Embed(
+                title=f"Games with Helpers — {self.key}",
+                description=display[:3800],
+                color=0x2b2d31
+            )
+            if interaction.response.is_done():
+                await interaction.edit_original_response(embed=embed, view=self.view)
+            else:
+                await interaction.response.edit_message(embed=embed, view=self.view)
+
+
+@bot.tree.command(name="gameswithhelp", description="Browse games with helpers by letter range.")
+async def games_with_help(interaction: discord.Interaction):
+    rows = conn.execute("""
+        SELECT g.game_name,
+               CASE WHEN g.guide_url IS NOT NULL AND g.guide_url != '' THEN 1 ELSE 0 END AS has_guide,
+               COUNT(h.user_id) AS helper_count
+        FROM games g
+        LEFT JOIN helpers h ON g.id = h.game_id
+        GROUP BY g.id
+        HAVING helper_count > 0
+        ORDER BY g.game_name COLLATE NOCASE
+    """).fetchall()
+
+    if not rows:
+        await interaction.response.send_message("No games currently have helpers.")
+        return
+
+    def marker(has_guide): return "📘" if has_guide else ""
+
+    # Build groups
+    groups = {"A–E": [], "F–J": [], "K–O": [], "P–T": [], "U–Z": [], "0–9": []}
+    for name, has_guide, helpers in rows:
+        entry = f"{name} 👥{helpers}{marker(has_guide)}"
+        first = name[0].upper()
+        if first.isdigit():
+            groups["0–9"].append(entry)
+        elif first <= "E":
+            groups["A–E"].append(entry)
+        elif first <= "J":
+            groups["F–J"].append(entry)
+        elif first <= "O":
+            groups["K–O"].append(entry)
+        elif first <= "T":
+            groups["P–T"].append(entry)
+        else:
+            groups["U–Z"].append(entry)
+
+    view = GamesWithHelpView(groups)
+    first_key = "A–E"
+    embed = discord.Embed(
+        title=f"Games with Helpers — {first_key}",
+        description="\n".join(groups[first_key]) or "_No games in this range._",
+        color=0x2b2d31
+    )
+    await interaction.response.send_message(embed=embed, view=view)
+
+@bot.tree.command(name="gamesbyletter", description="Shows games with helpers starting with a specific letter.")
+@app_commands.describe(letter="The letter to filter games by (A–Z or 0–9).")
+async def games_by_letter(interaction: discord.Interaction, letter: str):
+    letter = letter.strip().upper()
+    if not letter or len(letter) > 1 or (not letter.isalpha() and not letter.isdigit()):
+        await interaction.response.send_message("Please provide a single letter (A–Z or 0–9).", ephemeral=True)
+        return
+
+    rows = conn.execute("""
+        SELECT g.game_name,
+               CASE WHEN g.guide_url IS NOT NULL AND g.guide_url != '' THEN 1 ELSE 0 END AS has_guide,
+               COUNT(h.user_id) AS helper_count
+        FROM games g
+        LEFT JOIN helpers h ON g.id = h.game_id
+        WHERE UPPER(SUBSTR(g.game_name,1,1)) = ?
+        GROUP BY g.id
+        HAVING helper_count > 0
+        ORDER BY g.game_name COLLATE NOCASE
+    """, (letter,)).fetchall()
+
+    if not rows:
+        await interaction.response.send_message(f"No games found starting with **{letter}** that have helpers.")
+        return
+
+    def marker(has_guide): return "📘" if has_guide else ""
+    lines = [f"{name} 👥{helpers}{marker(has_guide)}" for name, has_guide, helpers in rows]
+    text = "\n".join(lines)
+    embed = discord.Embed(
+        title=f"Games with Helpers — {letter}",
+        description=text[:3900],
+        color=0x2b2d31
+    )
+    await interaction.response.send_message(embed=embed)
+
 
 
 # 2) gameswithguides — only games that have a guide; add 👥 if they also have a helper
