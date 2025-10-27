@@ -880,15 +880,22 @@ def build_help_embed(section: str, is_admin: bool) -> discord.Embed:
     if section == "helping":
         e.title = "Helping (offer your help)"
         e.description = (
-            "• `/addgame \"name\" [description] [guide_url]`\n"
-            "• `/updatedescription \"name\" \"desc\"`\n"
-            "• `/updateurl \"name\" \"url\"`\n"
-            "• `/renamegame \"old\" \"new\"`\n"
-            "• `/addme \"name\"` / `/removeme \"name\"`\n"
-            "• `/setstatus green|amber|red`\n"
-            "• `/removegame \"name\"` *(if you’re a helper or Tide44; confirms if others remain)*\n\n"
-            f"{base_note}"
-        )
+        "1️⃣ Create a new help listing and describe the support you offer:\n"
+        " `/addgame \"name\" [description] [guide_url]`\n\n"
+        "2️⃣ Update the game’s description to reflect new info:\n"
+        " `/updatedescription \"name\" \"desc\"`\n\n"
+        "3️⃣ Add or update a link to a guide for the game:\n"
+        " `/updateurl \"name\" \"url\"`\n\n"
+        "4️⃣ Rename an existing game entry if its title changes:\n"
+        " `/renamegame \"old\" \"new\"`\n\n"
+        "5️⃣ Join or leave as a helper for a game:\n"
+        " `/addme \"name\"` or `/removeme \"name\"`\n\n"
+        "6️⃣ Set your availability status so others know when you can help:\n"
+        " `/setstatus green|amber|red`\n\n"
+        "7️⃣ Remove a game listing you own (if you’re the only helper or Tide44):\n"
+        " `/removegame \"name\"`\n\n"
+        "_Tip: Green = active, Amber = limited, Red = currently unavailable._"
+    )
         return e
 
     if section == "finding":
