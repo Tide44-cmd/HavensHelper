@@ -1,4 +1,4 @@
-import discord
+gamesimport discord
 from discord.ext import commands
 from discord import ButtonStyle
 from discord.ui import Button, View
@@ -642,8 +642,8 @@ async def games_to_help_full(interaction: discord.Interaction):
                COUNT(h.user_id) AS helper_count
         FROM games g
         LEFT JOIN helpers h ON g.id = h.game_id
-        WHERE helper_count > 0
         GROUP BY g.id
+        HAVING helper_count > 0
         ORDER BY g.game_name COLLATE NOCASE
     """).fetchall()
 
@@ -651,14 +651,18 @@ async def games_to_help_full(interaction: discord.Interaction):
         await interaction.response.send_message("No games currently have helpers.")
         return
 
-    lines = []
-    for name, has_guide, count in rows:
-        marker = "📘" if has_guide else ""
-        lines.append(f"{name} 👥{count} {marker}".strip())
+    def marker(has_guide): return "📘" if has_guide else ""
 
-    chunks = [lines[i:i+30] for i in range(0, len(lines), 30)]
-    text = "\n".join(["\n".join(chunk) for chunk in chunks])
-    await interaction.response.send_message(f"**Games with Helpers (Full List)**\n{text[:1990]}")
+    lines = [f"{name} 👥{helpers}{marker(has_guide)}" for name, has_guide, helpers in rows]
+
+    # Avoid exceeding Discord's 2000 char limit
+    chunks = [lines[i:i + 40] for i in range(0, len(lines), 40)]
+    output = "\n".join("\n".join(chunk) for chunk in chunks)
+
+    await interaction.response.send_message(
+        f"**Games with Helpers (Full List)**\n{output[:1990]}"
+    )
+
 
 class GamesWithHelpView(discord.ui.View):
     def __init__(self, sections: dict[str, list[str]]):
