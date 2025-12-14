@@ -1011,7 +1011,14 @@ async def _process_give_thanks(interaction: discord.Interaction, thanked_member:
         await interaction.response.send_message(resp)
 
     after_count = before_count + 1
-    MILESTONES = {15: "The Pathfinder 🗺️", 50: "Haven's Guardian 🛡️", 100: "The Apex Hunter 🏹"}
+    MILESTONES = {
+      15: "The Pathfinder 🗺️",
+      50: "Haven's Guardian 🛡️",
+      100: "The Apex Hunter 🎯",
+      250: "Champion of the Hunt 🏹",
+      500: "Legendary Hunter 🦅",
+      1000: "Haven Master 👑"
+    }
     crossed = next((m for m in MILESTONES if before_count < m <= after_count), None)
     if crossed is not None:
         MOD_ROLE_ID = 1314735241360834640
