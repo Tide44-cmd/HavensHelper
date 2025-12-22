@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 import time
 from datetime import datetime, timedelta, timezone
 import calendar
+import uuid
 
 import io, asyncio, aiohttp, math
 from PIL import Image, ImageDraw, ImageFont
@@ -1574,25 +1575,11 @@ async def most_thanked_table(interaction: discord.Interaction, month: int | None
         embed = discord.Embed(color=discord.Color.teal()).set_image(url="attachment://mostthanked.png")
         await interaction.followup.send(embed=embed, file=file, view=view)
 
-import sqlite3
-import discord
-from discord import app_commands
 
 # --- Override user id (only you can run this) ---
 TIDE44_ID = 420996360699904000
 
 def combine_games(db_path: str, game1: str, game2: str, final_name: str) -> dict:
-    """
-    Combines two game entries into one (Haven's Helper schema):
-    - Finds both games by name (case-insensitive)
-    - Keeps the older (smaller id) as primary
-    - Renames primary to final_name
-    - Moves helpers from duplicate to primary
-    - Deletes duplicate
-    - Preserves descriptions for reporting ("Description" + "Lost description")
-    - Also attempts a sensible guide_url merge:
-        - If primary has no guide_url but duplicate does, copy it to primary.
-    """
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
@@ -1600,7 +1587,6 @@ def combine_games(db_path: str, game1: str, game2: str, final_name: str) -> dict
     try:
         conn.execute("BEGIN;")
 
-        # Look up both games case-insensitively, returning canonical rows
         cur.execute(
             """
             SELECT id, game_name, description, guide_url
@@ -1614,18 +1600,10 @@ def combine_games(db_path: str, game1: str, game2: str, final_name: str) -> dict
 
         if len(rows) != 2:
             found = [r["game_name"] for r in rows]
-            raise ValueError(
-                f"Expected 2 games, found {len(rows)}. Found: {found}. Check names/spelling."
-            )
+            raise ValueError(f"Expected 2 games, found {len(rows)}. Found: {found}. Check names/spelling.")
 
-        # Unpack both rows
         r1, r2 = rows[0], rows[1]
-
-        # Decide primary (keep) vs duplicate (delete) by smallest id
-        if r1["id"] < r2["id"]:
-            primary, duplicate = r1, r2
-        else:
-            primary, duplicate = r2, r1
+        primary, duplicate = (r1, r2) if r1["id"] < r2["id"] else (r2, r1)
 
         primary_id = primary["id"]
         duplicate_id = duplicate["id"]
@@ -1639,45 +1617,39 @@ def combine_games(db_path: str, game1: str, game2: str, final_name: str) -> dict
         primary_guide = primary["guide_url"]
         duplicate_guide = duplicate["guide_url"]
 
-        # Move helpers from duplicate -> primary
+        # Move helpers
         cur.execute(
-            """
-            UPDATE helpers
-            SET game_id = ?
-            WHERE game_id = ?;
-            """,
+            "UPDATE helpers SET game_id = ? WHERE game_id = ?;",
             (primary_id, duplicate_id),
         )
         moved_helpers = cur.rowcount
 
-        # Optional: merge guide_url (only if primary empty and duplicate has one)
+        # Merge guide_url if primary empty
         guide_merged = False
         if (primary_guide is None or str(primary_guide).strip() == "") and (duplicate_guide and str(duplicate_guide).strip() != ""):
             primary_guide = duplicate_guide
             guide_merged = True
 
-        # Update primary game (name + guide_url if merged; description unchanged by design)
+        # If final_name is currently held by the duplicate row, avoid UNIQUE collision
+        used_temp_rename = (final_name.strip().lower() == duplicate_old_name.strip().lower())
+        if used_temp_rename:
+            temp_name = f"__merge_tmp__{uuid.uuid4().hex}"
+            cur.execute("UPDATE games SET game_name = ? WHERE id = ?;", (temp_name, primary_id))
+
+        # Delete duplicate (frees up final_name if it belonged to duplicate)
+        cur.execute("DELETE FROM games WHERE id = ?;", (duplicate_id,))
+
+        # Rename primary to final_name (+ guide_url if merged). Description unchanged intentionally.
         if guide_merged:
             cur.execute(
-                """
-                UPDATE games
-                SET game_name = ?, guide_url = ?
-                WHERE id = ?;
-                """,
+                "UPDATE games SET game_name = ?, guide_url = ? WHERE id = ?;",
                 (final_name, primary_guide, primary_id),
             )
         else:
             cur.execute(
-                """
-                UPDATE games
-                SET game_name = ?
-                WHERE id = ?;
-                """,
+                "UPDATE games SET game_name = ? WHERE id = ?;",
                 (final_name, primary_id),
             )
-
-        # Delete duplicate game
-        cur.execute("DELETE FROM games WHERE id = ?;", (duplicate_id,))
 
         conn.commit()
 
@@ -1693,6 +1665,7 @@ def combine_games(db_path: str, game1: str, game2: str, final_name: str) -> dict
             "kept_guide_url": primary_guide,
             "lost_guide_url": duplicate_guide,
             "guide_merged": guide_merged,
+            "used_temp_rename": used_temp_rename,
         }
 
     except Exception:
@@ -1700,6 +1673,7 @@ def combine_games(db_path: str, game1: str, game2: str, final_name: str) -> dict
         raise
     finally:
         conn.close()
+
 
 
 # ----------------------------
