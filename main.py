@@ -271,35 +271,83 @@ class DescriptionChoiceView(View):
         await interaction.response.edit_message(content="❌ Update cancelled.", view=None)
 
 
+DB_PATH = "helpers.db"
+
+async def _game_autocomplete(interaction: discord.Interaction, current: str):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT game_name
+        FROM games
+        WHERE game_name LIKE ?
+        ORDER BY game_name ASC
+        LIMIT 25;
+        """,
+        (f"%{current}%",),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return [app_commands.Choice(name=r[0], value=r[0]) for r in rows]
+
+
 @bot.tree.command(name="updatedescription", description="Updates the description for an existing game.")
+@app_commands.autocomplete(game_name=_game_autocomplete)
 async def update_description(interaction: discord.Interaction, game_name: str, description: str):
-    c.execute("SELECT description FROM games WHERE game_name = ?", (game_name,))
-    result = c.fetchone()
-    if not result:
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+
+    # Case-insensitive find (and pull canonical name)
+    c.execute(
+        "SELECT game_name, description FROM games WHERE game_name = ? COLLATE NOCASE",
+        (game_name,)
+    )
+    row = c.fetchone()
+
+    if not row:
+        conn.close()
         await interaction.response.send_message(f"Game '{game_name}' not found.")
         return
 
-    existing_description = result[0]
+    canonical_name, existing_description = row[0], row[1]
+
     if existing_description:
-        view = DescriptionChoiceView(game_name, description, existing_description)
+        conn.close()  # view handles any subsequent update paths
+        view = DescriptionChoiceView(canonical_name, description, existing_description)
         await interaction.response.send_message(
             f"This game already has the description:\n**{existing_description}**\nWhat do you want to do?",
             view=view
         )
-    else:
-        c.execute("UPDATE games SET description = ? WHERE game_name = ?", (description, game_name))
-        conn.commit()
-        await interaction.response.send_message(f"Description for '{game_name}' has been updated.")
+        return
+
+    c.execute(
+        "UPDATE games SET description = ? WHERE game_name = ? COLLATE NOCASE",
+        (description, canonical_name)
+    )
+    conn.commit()
+    conn.close()
+
+    await interaction.response.send_message(f"Description for '{canonical_name}' has been updated.")
 
 
-# Update game URL
 @bot.tree.command(name="updateurl", description="Updates or adds a guide URL for a game.")
+@app_commands.autocomplete(game_name=_game_autocomplete)
 async def update_url(interaction: discord.Interaction, game_name: str, guide_url: str):
-    c.execute("UPDATE games SET guide_url = ? WHERE game_name = ?", (guide_url, game_name))
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+
+    # Case-insensitive update + rowcount check
+    c.execute(
+        "UPDATE games SET guide_url = ? WHERE game_name = ? COLLATE NOCASE",
+        (guide_url, game_name)
+    )
+
     if c.rowcount > 0:
         conn.commit()
+        conn.close()
         await interaction.response.send_message(f"Guide URL for '{game_name}' updated.")
     else:
+        conn.close()
         await interaction.response.send_message(f"Game '{game_name}' not found.")
 
 
@@ -1525,6 +1573,218 @@ async def most_thanked_table(interaction: discord.Interaction, month: int | None
         file = await render_most_thanked_table(interaction.guild, rows, title_text=title)
         embed = discord.Embed(color=discord.Color.teal()).set_image(url="attachment://mostthanked.png")
         await interaction.followup.send(embed=embed, file=file, view=view)
+
+import sqlite3
+import discord
+from discord import app_commands
+
+# --- Override user id (only you can run this) ---
+TIDE44_ID = 420996360699904000
+
+def combine_games(db_path: str, game1: str, game2: str, final_name: str) -> dict:
+    """
+    Combines two game entries into one (Haven's Helper schema):
+    - Finds both games by name (case-insensitive)
+    - Keeps the older (smaller id) as primary
+    - Renames primary to final_name
+    - Moves helpers from duplicate to primary
+    - Deletes duplicate
+    - Preserves descriptions for reporting ("Description" + "Lost description")
+    - Also attempts a sensible guide_url merge:
+        - If primary has no guide_url but duplicate does, copy it to primary.
+    """
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+
+    try:
+        conn.execute("BEGIN;")
+
+        # Look up both games case-insensitively, returning canonical rows
+        cur.execute(
+            """
+            SELECT id, game_name, description, guide_url
+            FROM games
+            WHERE game_name = ? COLLATE NOCASE
+               OR game_name = ? COLLATE NOCASE;
+            """,
+            (game1, game2),
+        )
+        rows = cur.fetchall()
+
+        if len(rows) != 2:
+            found = [r["game_name"] for r in rows]
+            raise ValueError(
+                f"Expected 2 games, found {len(rows)}. Found: {found}. Check names/spelling."
+            )
+
+        # Unpack both rows
+        r1, r2 = rows[0], rows[1]
+
+        # Decide primary (keep) vs duplicate (delete) by smallest id
+        if r1["id"] < r2["id"]:
+            primary, duplicate = r1, r2
+        else:
+            primary, duplicate = r2, r1
+
+        primary_id = primary["id"]
+        duplicate_id = duplicate["id"]
+
+        primary_old_name = primary["game_name"]
+        duplicate_old_name = duplicate["game_name"]
+
+        primary_desc = primary["description"]
+        duplicate_desc = duplicate["description"]
+
+        primary_guide = primary["guide_url"]
+        duplicate_guide = duplicate["guide_url"]
+
+        # Move helpers from duplicate -> primary
+        cur.execute(
+            """
+            UPDATE helpers
+            SET game_id = ?
+            WHERE game_id = ?;
+            """,
+            (primary_id, duplicate_id),
+        )
+        moved_helpers = cur.rowcount
+
+        # Optional: merge guide_url (only if primary empty and duplicate has one)
+        guide_merged = False
+        if (primary_guide is None or str(primary_guide).strip() == "") and (duplicate_guide and str(duplicate_guide).strip() != ""):
+            primary_guide = duplicate_guide
+            guide_merged = True
+
+        # Update primary game (name + guide_url if merged; description unchanged by design)
+        if guide_merged:
+            cur.execute(
+                """
+                UPDATE games
+                SET game_name = ?, guide_url = ?
+                WHERE id = ?;
+                """,
+                (final_name, primary_guide, primary_id),
+            )
+        else:
+            cur.execute(
+                """
+                UPDATE games
+                SET game_name = ?
+                WHERE id = ?;
+                """,
+                (final_name, primary_id),
+            )
+
+        # Delete duplicate game
+        cur.execute("DELETE FROM games WHERE id = ?;", (duplicate_id,))
+
+        conn.commit()
+
+        return {
+            "primary_id": primary_id,
+            "primary_old_name": primary_old_name,
+            "duplicate_id": duplicate_id,
+            "duplicate_old_name": duplicate_old_name,
+            "final_name": final_name,
+            "helpers_moved": moved_helpers,
+            "kept_description": primary_desc,
+            "lost_description": duplicate_desc,
+            "kept_guide_url": primary_guide,
+            "lost_guide_url": duplicate_guide,
+            "guide_merged": guide_merged,
+        }
+
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+# ----------------------------
+# Autocomplete helper (optional but nice)
+# ----------------------------
+async def _game_autocomplete(interaction: discord.Interaction, current: str):
+    conn = sqlite3.connect("helpers.db")
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT game_name
+        FROM games
+        WHERE game_name LIKE ?
+        ORDER BY game_name ASC
+        LIMIT 25;
+        """,
+        (f"%{current}%",),
+    )
+    results = [row[0] for row in cur.fetchall()]
+    conn.close()
+    return [app_commands.Choice(name=name, value=name) for name in results]
+
+
+# ----------------------------
+# Slash command: /combinegames
+# ----------------------------
+@bot.tree.command(name="combinegames", description="(Tide44 only) Combine two duplicate game entries into one.")
+@app_commands.autocomplete(game1=_game_autocomplete, game2=_game_autocomplete)
+async def combine_games_cmd(
+    interaction: discord.Interaction,
+    game1: str,
+    game2: str,
+    final_name: str
+):
+    # Permission: Tide44 only
+    if interaction.user.id != TIDE44_ID:
+        await interaction.response.send_message("❌ You don’t have permission to use this command.", ephemeral=True)
+        return
+
+    # Quick guard: prevent same input
+    if game1.strip().lower() == game2.strip().lower():
+        await interaction.response.send_message("❌ Please choose two different game entries to combine.", ephemeral=True)
+        return
+
+    try:
+        summary = combine_games("helpers.db", game1, game2, final_name)
+
+        kept_desc = summary["kept_description"] if summary["kept_description"] else "No description"
+        lost_desc = summary["lost_description"] if summary["lost_description"] else "No description"
+
+        # PUBLIC success message (visible for all)
+        msg = (
+            "✅ **Combined games successfully**\n"
+            f"• **Kept:** `{summary['primary_old_name']}` (ID {summary['primary_id']})\n"
+            f"• **Deleted duplicate:** `{summary['duplicate_old_name']}` (ID {summary['duplicate_id']})\n"
+            f"• **Final name:** `{summary['final_name']}`\n"
+            f"• **Helpers moved:** {summary['helpers_moved']}\n\n"
+            f"**Description:** {kept_desc}\n"
+            f"**Lost description:** {lost_desc}\n\n"
+            "If you would like to update the new description to reflect the merge, please use `/updatedescription`."
+        )
+
+        await interaction.response.send_message(msg)
+
+        # Log it
+        conn = sqlite3.connect("helpers.db")
+        c = conn.cursor()
+        c.execute(
+            "INSERT INTO logs (user, command, game_name) VALUES (?, ?, ?)",
+            (str(interaction.user), "combinegames", f"{game1} + {game2} -> {final_name}")
+        )
+        conn.commit()
+        conn.close()
+
+    except ValueError as e:
+        await interaction.response.send_message(f"❌ {e}", ephemeral=True)
+    except sqlite3.IntegrityError as e:
+        # e.g. final_name already exists as a unique game_name
+        await interaction.response.send_message(
+            f"❌ Could not combine: `{final_name}` already exists (game_name must be unique).",
+            ephemeral=True
+        )
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Unexpected error: {e}", ephemeral=True)
+
 
 import random
 
