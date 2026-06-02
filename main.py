@@ -497,6 +497,53 @@ async def remove_me(interaction: discord.Interaction, game_name: str):
     else:
         await interaction.response.send_message(f"Game '{game_name}' not found.")
 
+
+@bot.tree.command(name="removehelper", description="Remove a specific helper from a specific game (Admin/Tide44 only).")
+@app_commands.autocomplete(game_name=_game_autocomplete)
+@app_commands.describe(user="The helper to remove", game_name="The game to remove them from")
+async def remove_helper(interaction: discord.Interaction, user: discord.Member, game_name: str):
+    is_admin = bool(interaction.user.guild_permissions.administrator)
+    if not (is_admin or interaction.user.id == TIDE44_ID):
+        await interaction.response.send_message(
+            "You need administrator permission to remove another helper from a game.",
+            ephemeral=True
+        )
+        return
+
+    game = conn.execute(
+        "SELECT id, game_name FROM games WHERE game_name = ? COLLATE NOCASE",
+        (game_name,)
+    ).fetchone()
+    if not game:
+        await interaction.response.send_message(f"Game '{game_name}' not found.", ephemeral=True)
+        return
+
+    game_id, canonical_name = game
+    c.execute(
+        "DELETE FROM helpers WHERE user_id = ? AND game_id = ?",
+        (str(user.id), game_id)
+    )
+    removed_count = c.rowcount
+
+    if removed_count == 0:
+        await interaction.response.send_message(
+            f"{user.mention} is not listed as a helper for '{canonical_name}'.",
+            ephemeral=True
+        )
+        return
+
+    conn.commit()
+    c.execute(
+        "INSERT INTO logs (user, command, game_name) VALUES (?, ?, ?)",
+        (str(interaction.user), "removehelper", f"Removed {user} from {canonical_name}")
+    )
+    conn.commit()
+
+    detail = f" ({removed_count} helper record(s) removed)" if removed_count > 1 else ""
+    await interaction.response.send_message(
+        f"{user.mention} has been removed as a helper for '{canonical_name}'{detail}."
+    )
+
 # Set helper status
 @bot.tree.command(name="setstatus", description="Sets your availability status (Green/Amber/Red).")
 async def set_status(interaction: discord.Interaction, status: str):
@@ -1012,6 +1059,7 @@ def build_help_embed(section: str, is_admin: bool) -> discord.Embed:
     if section == "admin" and is_admin:
         e.title = "Admin"
         e.description = (
+            "• `/removehelper @user \"game\"`\n"
             "• `/deleteuser @user`\n"
             "• `/deleteusermanual \"username#discrim\"`\n\n"
             f"{base_note}"
@@ -1161,9 +1209,35 @@ async def most_thanked_full(interaction: discord.Interaction):
     await interaction.response.send_message(response)
 
 
+def _format_feedback_date(raw_timestamp: str | None) -> str:
+    if not raw_timestamp:
+        return "Unknown date"
+
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f"):
+        try:
+            dt = datetime.strptime(raw_timestamp, fmt).replace(tzinfo=timezone.utc)
+            return f"<t:{int(dt.timestamp())}:R>"
+        except ValueError:
+            continue
+
+    return raw_timestamp
+
+
+def _clip_embed_value(value: str, limit: int = 1024) -> str:
+    value = value.strip()
+    if len(value) <= limit:
+        return value
+    return value[:limit - 3].rstrip() + "..."
+
+
 @bot.tree.command(name="showfeedback", description="Shows the last 10 feedback messages received by a user.")
 async def show_feedback(interaction: discord.Interaction, user: discord.Member):
     user_id = str(user.id)
+    total_thanks = conn.execute(
+        "SELECT COUNT(*) FROM thanks WHERE thanked_user_id = ?",
+        (user_id,)
+    ).fetchone()[0]
+
     c.execute('''SELECT thanking_user_name, game, message, timestamp
                  FROM thanks
                  WHERE thanked_user_id = ?
@@ -1171,14 +1245,32 @@ async def show_feedback(interaction: discord.Interaction, user: discord.Member):
                  LIMIT 10''', (user_id,))
     feedback = c.fetchall()
 
-    if feedback:
-        feedback_list = "\n".join([
-            f"**From:** {row[0]}\n**Game:** {row[1] if row[1] else 'N/A'}\n**Message:** {row[2] if row[2] else 'No message'}\n**Date:** {row[3]}"
-            for row in feedback
-        ])
-        await interaction.response.send_message(f"**Feedback for {user.name}:**\n{feedback_list}")
-    else:
+    if not feedback:
         await interaction.response.send_message(f"No feedback found for {user.mention}.")
+        return
+
+    embed = discord.Embed(
+        title=f"Feedback for {user.display_name}",
+        description=f"Showing the latest {len(feedback)} of {total_thanks} thanks received.",
+        color=0x2b2d31
+    )
+    embed.set_thumbnail(url=user.display_avatar.url)
+
+    for idx, (from_user, game, message, timestamp) in enumerate(feedback, start=1):
+        game_text = game.strip() if game else "Not specified"
+        message_text = message.strip() if message else "No message included."
+        date_text = _format_feedback_date(timestamp)
+        embed.add_field(
+            name=f"{idx}. From {from_user}",
+            value=_clip_embed_value(
+                f"**Game:** {game_text}\n"
+                f"**Message:** {message_text}\n"
+                f"**When:** {date_text}"
+            ),
+            inline=False
+        )
+
+    await interaction.response.send_message(embed=embed)
 
 @bot.tree.command(name="deleteusermanual", description="Remove a user from all games using their username (Admin only)")
 @commands.has_permissions(administrator=True)
