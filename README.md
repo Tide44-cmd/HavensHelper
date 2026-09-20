@@ -45,6 +45,8 @@ Whether you're a completionist or just need a helping hand, Haven's Helper is yo
 ### Thanks and Feedback:
 - /givethanks `"@user"` [Game] [Message] - Give thanks to another user for their help, with optional game and message details. (Cannot thank yourself.)
 - /mostthanked [Month] [Year] - Shows the most thanked users, either all-time or for a specific month and year.
+- /givemassthanks person1 [person2...] [Game] [Message] - Give the same thanks to up to eight people from one session.
+- /thanksession [Game] [Message] - Open an interactive selector to thank up to eight people at once.
 - /showfeedback `"@user"` - Displays the last 10 feedback messages received by a specific user.
 
 ### Bot Information:
