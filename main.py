@@ -1024,6 +1024,10 @@ def build_help_embed(section: str, is_admin: bool) -> discord.Embed:
         e.description = (
             "• Thank another user for their help:\n"
             " `/givethanks @user [game] [message]`\n\n"
+            "• Thank up to eight users for the same session:\n"
+            " `/givemassthanks person1 [person2...] [game] [message]`\n\n"
+            "• Select up to eight users in an interactive thanks session:\n"
+            " `/thanksession [game] [message]`\n\n"
             "• View the most thanked users for a specific month or year:\n"
             " `/mostthanked [month] [year]`\n\n"
             "• Show the all-time leaderboard of most thanked helpers:\n"
@@ -1052,7 +1056,9 @@ def build_help_embed(section: str, is_admin: bool) -> discord.Embed:
         e.title = "Fun"
         e.description = (
             "• Attempt to delete a god Tide44 : "
-            " `/removetide44`\n"
+            " `/removetide44`\n\n"
+            "• Borrow some confidence from Dub:\n"
+            " `/quotedub`\n"
         )
         return e
 
@@ -1135,6 +1141,240 @@ async def _process_give_thanks(interaction: discord.Interaction, thanked_member:
 @bot.tree.command(name="givethanks", description="Give thanks to another user for their help.")
 async def give_thanks(interaction: discord.Interaction, user: discord.Member, game: str = None, message: str = None):
     await _process_give_thanks(interaction, user, game, message)
+
+
+async def _process_group_thanks(
+    interaction: discord.Interaction,
+    members: list[discord.Member | discord.User],
+    game: str | None,
+    message: str | None,
+    *,
+    from_session: bool = False
+) -> bool:
+    member_ids = [member.id for member in members]
+    if interaction.user.id in member_ids:
+        await interaction.response.send_message(
+            "You can't include yourself in group thanks.",
+            ephemeral=True
+        )
+        return False
+
+    if len(member_ids) != len(set(member_ids)):
+        await interaction.response.send_message(
+            "Each person can only be included once. Please remove any duplicate selections.",
+            ephemeral=True
+        )
+        return False
+
+    thanking_user_id = str(interaction.user.id)
+    before_counts = {}
+    rows = []
+
+    for member in members:
+        thanked_user_id = str(member.id)
+        before_counts[member.id] = conn.execute(
+            "SELECT COUNT(*) FROM thanks WHERE thanked_user_id = ?",
+            (thanked_user_id,)
+        ).fetchone()[0]
+        rows.append((
+            thanked_user_id,
+            str(member),
+            thanking_user_id,
+            str(interaction.user),
+            game,
+            message
+        ))
+
+    conn.executemany(
+        '''INSERT INTO thanks
+           (thanked_user_id, thanked_user_name, thanking_user_id, thanking_user_name, game, message)
+           VALUES (?, ?, ?, ?, ?, ?)''',
+        rows
+    )
+    conn.commit()
+
+    mentions = ", ".join(member.mention for member in members)
+    response = f"{interaction.user.mention} thanked **{len(members)} people**: {mentions}"
+    if game:
+        response += f"\n**Game:** {game}"
+    if message:
+        response += f"\n**Message:** {message}"
+
+    if len(response) > 1900:
+        response = response[:1897].rstrip() + "..."
+
+    allowed_mentions = discord.AllowedMentions(users=True, roles=False, everyone=False)
+    if from_session:
+        await interaction.response.edit_message(
+            content="Thanks sent successfully.",
+            view=None
+        )
+        await interaction.followup.send(
+            response,
+            allowed_mentions=allowed_mentions
+        )
+    else:
+        await interaction.response.send_message(
+            response,
+            allowed_mentions=allowed_mentions
+        )
+
+    milestones = {
+        15: "The Pathfinder 🗺️",
+        50: "Haven's Guardian 🛡️",
+        100: "The Apex Hunter 🎯",
+        250: "Champion of the Hunt 🏹",
+        500: "Legendary Hunter 🦅",
+        1000: "Haven Master 👑"
+    }
+    mod_role_id = 1314735241360834640
+    mod_role = interaction.guild.get_role(mod_role_id) if interaction.guild else None
+    role_mention = mod_role.mention if mod_role else f"<@&{mod_role_id}>"
+
+    for member in members:
+        before_count = before_counts[member.id]
+        crossed = next(
+            (milestone for milestone in milestones if before_count < milestone <= before_count + 1),
+            None
+        )
+        if crossed is not None:
+            await interaction.followup.send(
+                f"🎉 {member.mention} just hit **{crossed} thanks** and earned "
+                f"**{milestones[crossed]}**!\n"
+                f"{role_mention} please award this role in recognition of their support.",
+                allowed_mentions=discord.AllowedMentions(roles=True, users=True, everyone=False)
+            )
+
+    return True
+
+
+@bot.tree.command(name="givemassthanks", description="Give the same thanks to up to eight people.")
+@app_commands.describe(
+    person1="First person to thank",
+    person2="Second person to thank (optional)",
+    person3="Third person to thank (optional)",
+    person4="Fourth person to thank (optional)",
+    person5="Fifth person to thank (optional)",
+    person6="Sixth person to thank (optional)",
+    person7="Seventh person to thank (optional)",
+    person8="Eighth person to thank (optional)",
+    game="Game the group helped with (optional)",
+    message="Feedback message shared by the group (optional)"
+)
+async def give_mass_thanks(
+    interaction: discord.Interaction,
+    person1: discord.Member,
+    person2: discord.Member = None,
+    person3: discord.Member = None,
+    person4: discord.Member = None,
+    person5: discord.Member = None,
+    person6: discord.Member = None,
+    person7: discord.Member = None,
+    person8: discord.Member = None,
+    game: str = None,
+    message: str = None
+):
+    members = [
+        member for member in
+        (person1, person2, person3, person4, person5, person6, person7, person8)
+        if member is not None
+    ]
+    await _process_group_thanks(interaction, members, game, message)
+
+
+class ThanksSessionView(discord.ui.View):
+    def __init__(self, requester_id: int, game: str | None, message: str | None):
+        super().__init__(timeout=180)
+        self.requester_id = requester_id
+        self.game = game
+        self.message = message
+        self.selected_members: list[discord.Member | discord.User] = []
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.requester_id:
+            await interaction.response.send_message(
+                "Only the person who started this thanks session can use it.",
+                ephemeral=True
+            )
+            return False
+        return True
+
+    @discord.ui.select(
+        cls=discord.ui.UserSelect,
+        placeholder="Choose 1-8 people to thank",
+        min_values=1,
+        max_values=8,
+        row=0
+    )
+    async def select_people(
+        self,
+        interaction: discord.Interaction,
+        select: discord.ui.UserSelect
+    ):
+        self.selected_members = list(select.values)
+        self.send_thanks.disabled = False
+        names = ", ".join(member.display_name for member in self.selected_members)
+        await interaction.response.edit_message(
+            content=f"Selected **{len(self.selected_members)}**: {names}",
+            view=self
+        )
+
+    @discord.ui.button(
+        label="Send Thanks",
+        style=discord.ButtonStyle.success,
+        disabled=True,
+        row=1
+    )
+    async def send_thanks(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.selected_members:
+            await interaction.response.send_message(
+                "Choose at least one person first.",
+                ephemeral=True
+            )
+            return
+
+        sent = await _process_group_thanks(
+            interaction,
+            self.selected_members,
+            self.game,
+            self.message,
+            from_session=True
+        )
+        if sent:
+            self.stop()
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, row=1)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.stop()
+        await interaction.response.edit_message(
+            content="Thanks session cancelled.",
+            view=None
+        )
+
+
+@bot.tree.command(name="thanksession", description="Choose up to eight people and thank them together.")
+@app_commands.guild_only()
+@app_commands.describe(
+    game="Game the group helped with (optional)",
+    message="Feedback message shared by the group (optional)"
+)
+async def thanks_session(
+    interaction: discord.Interaction,
+    game: str = None,
+    message: str = None
+):
+    view = ThanksSessionView(interaction.user.id, game, message)
+    details = []
+    if game:
+        details.append(f"**Game:** {game}")
+    if message:
+        details.append(f"**Message:** {message}")
+
+    content = "Choose everyone you want to thank, then press **Send Thanks**."
+    if details:
+        content += "\n" + "\n".join(details)
+
+    await interaction.response.send_message(content, view=view, ephemeral=True)
 
 # Right-click context menu
 class GiveThanksModal(discord.ui.Modal, title="Give Thanks"):
@@ -1869,6 +2109,13 @@ async def remove_tide44(interaction: discord.Interaction):
         "The bot laughs, restoring order to the digital plane."
     )
     await interaction.response.send_message(main_story)
+
+
+@bot.tree.command(name="quotedub", description="Shares Dub's words of encouragement.")
+async def quote_dub(interaction: discord.Interaction):
+    await interaction.response.send_message(
+        '> "If dub can do it, then you can do it."'
+    )
 
 
 
